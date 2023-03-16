@@ -64,7 +64,7 @@ type AppendEntriesArgs struct {
 }
 
 type AppendEntriesReply struct {
-	appended bool
+	Appended bool
 }
 
 type LogEntry struct {
@@ -149,7 +149,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	// done by sending a messsage to the rf.appendEntriesChannel, which is consumed by
 	// the election timeout goroutine to reset the timer.
 	if len(args.LogEntries) == 0 {
-		reply.appended = true
+		reply.Appended = true
 		fmt.Printf("2. server %d:: Received RPC from %d\n", rf.me, args.LeaderID)
 		rf.appendEntriesChannel <- reply
 		fmt.Printf("3. server %d:: Received RPC from %d\n", rf.me, args.LeaderID)
@@ -438,14 +438,15 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.state = Follower
 	rf.currentTerm = 0
 	rf.votedFor = make(map[int]int)
+	rf.appendEntriesChannel = make(chan *AppendEntriesReply)
 	// Choosing a randomized timeout between 500 & 800 ms. This is because
 	// our AppendEntries RPC that is used as heartbeat is sent once per 100ms.
 	// If we haven't received even one heartbeat within 500ms, then we can declare
 	// the leader as dead and:
 	// increment our current term -> transition to CANDIDATE state -> initiate leader election
 	// -> wait for a vote from a of of followers.
-	min := 2000
-	max := 3000
+	min := 500
+	max := 800
 	electionTimeout := rand.Intn(max-min+1) + min
 	fmt.Printf("server-%d:: Selected random timeout %d!\n", me, electionTimeout)
 	heartbeatTimeout := 100
