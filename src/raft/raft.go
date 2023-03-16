@@ -56,6 +56,7 @@ type ApplyMsg struct {
 
 type AppendEntriesArgs struct {
 	Term         int
+	LeaderID     int
 	LogEntries   []LogEntry
 	PrevLogIndex int
 	PrevLogTerm  int
@@ -142,18 +143,21 @@ func (rf *Raft) candidateLogMoreUpToDate(candidateLastLogTerm int, candidateLast
 func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply) {
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
+	fmt.Printf("1. server %d:: Received RPC from %d, len of args %d\n", rf.me, args.LeaderID, len(args.LogEntries))
 	// We need to reset the Election Timer here in case the log entries are null,
 	// since we have received a heartbeat message from the current leader. This is
 	// done by sending a messsage to the rf.appendEntriesChannel, which is consumed by
 	// the election timeout goroutine to reset the timer.
 	if len(args.LogEntries) == 0 {
 		reply.appended = true
+		fmt.Printf("2. server %d:: Received RPC from %d\n", rf.me, args.LeaderID)
 		rf.appendEntriesChannel <- reply
+		fmt.Printf("3. server %d:: Received RPC from %d\n", rf.me, args.LeaderID)
 		// In case we receive an AppendEntries RPC from a server with a more
 		// up-to-date, consider it the leader of that term, update your term,
 		// and step down to Follower in case you're a Candidate with an ongoing
 		// leader election.
-		if rf.currentTerm < args.Term {
+		if rf.currentTerm <= args.Term {
 			rf.currentTerm = args.Term
 			if rf.state == Candidate {
 				rf.state = Follower
@@ -233,6 +237,8 @@ func (rf *Raft) sendRequestVote(server int, args *RequestVoteArgs, reply *Reques
 }
 
 func (rf *Raft) sendAppendEntries(server int, args *AppendEntriesArgs, reply *AppendEntriesReply) bool {
+
+	// fmt.Printf("Called AE on %d", server)
 	ok := rf.peers[server].Call("Raft.AppendEntries", args, reply)
 	return ok
 }
@@ -357,11 +363,15 @@ func (rf *Raft) performLeaderElection(peers []*labrpc.ClientEnd, myIndex int, te
 
 func (rf *Raft) sendHeartbeatIfLeader(heartbeatTimeout int) {
 	for {
+		// fmt.Printf("server-%d:: trying to get state\n", rf.me)
+
 		term, isLeader := rf.GetState()
+		// fmt.Printf("server-%d:: term: %d and isLeader: %t.\n", rf.me, term, isLeader)
+
 		if isLeader {
 			fmt.Printf("server-%d:: Sending AppendEntries RPC to assert authority as leader.\n", rf.me)
 			for index := range rf.peers {
-				args := &AppendEntriesArgs{Term: term}
+				args := &AppendEntriesArgs{Term: term, LeaderID: rf.me}
 				reply := &AppendEntriesReply{}
 				go rf.sendAppendEntries(index, args, reply)
 			}
@@ -372,16 +382,17 @@ func (rf *Raft) sendHeartbeatIfLeader(heartbeatTimeout int) {
 
 func (rf *Raft) electionTimeoutRoutine(electionTimeout int) {
 	for {
-		rf.mu.Lock()
+
 		select {
 		case <-rf.appendEntriesChannel:
-			rf.mu.Unlock()
+
 			fmt.Printf("server-%d:: electionTimeoutRoutine: Received AppendEntries RPC from current leader. Resetting election timeout.\n", rf.me)
 			// Breaking out of the select statement causes the timeout to be
 			// get reset which is important when we've received a heartbeat
 			// from the current leader.
 		case <-time.After(time.Duration(electionTimeout) * time.Millisecond):
 			fmt.Printf("server-%d:: electionTimeoutRoutine: Hit election timeout %d! Initiating election.\n", rf.me, electionTimeout)
+			rf.mu.Lock()
 			rf.currentTerm += 1
 			rf.state = Candidate
 			curServerLastLogIndex := len(rf.log) - 1
@@ -392,8 +403,8 @@ func (rf *Raft) electionTimeoutRoutine(electionTimeout int) {
 			curTerm := rf.currentTerm
 			rf.mu.Unlock()
 			if rf.performLeaderElection(rf.peers, rf.me, curTerm, curServerLastLogIndex, curServerLastLogTerm) {
-				fmt.Printf("server-%d:: I am the leader for term %d\n", rf.me, curTerm)
 				rf.mu.Lock()
+				fmt.Printf("server-%d:: I am the leader for term %d\n", rf.me, curTerm)
 				rf.state = Leader
 				rf.mu.Unlock()
 			}
@@ -433,8 +444,8 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	// the leader as dead and:
 	// increment our current term -> transition to CANDIDATE state -> initiate leader election
 	// -> wait for a vote from a of of followers.
-	min := 500
-	max := 800
+	min := 2000
+	max := 3000
 	electionTimeout := rand.Intn(max-min+1) + min
 	fmt.Printf("server-%d:: Selected random timeout %d!\n", me, electionTimeout)
 	heartbeatTimeout := 100
