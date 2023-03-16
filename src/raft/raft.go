@@ -86,6 +86,7 @@ type Raft struct {
 	log                  []LogEntry
 	electionTimeout      int
 	appendEntriesChannel chan *AppendEntriesReply
+	requestVotesChannel  chan *RequestVoteReply
 	state                State
 	// Your data here (2A, 2B).
 	// Look at the paper's Figure 2 for a description of what
@@ -143,16 +144,16 @@ func (rf *Raft) candidateLogMoreUpToDate(candidateLastLogTerm int, candidateLast
 func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply) {
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
-	fmt.Printf("1. server %d:: Received RPC from %d, len of args %d\n", rf.me, args.LeaderID, len(args.LogEntries))
+	// fmt.Printf("1. server %d:: Received RPC from %d, len of args %d\n", rf.me, args.LeaderID, len(args.LogEntries))
 	// We need to reset the Election Timer here in case the log entries are null,
 	// since we have received a heartbeat message from the current leader. This is
 	// done by sending a messsage to the rf.appendEntriesChannel, which is consumed by
 	// the election timeout goroutine to reset the timer.
 	if len(args.LogEntries) == 0 {
 		reply.Appended = true
-		fmt.Printf("2. server %d:: Received RPC from %d\n", rf.me, args.LeaderID)
+		// fmt.Printf("2. server %d:: Received RPC from %d\n", rf.me, args.LeaderID)
 		rf.appendEntriesChannel <- reply
-		fmt.Printf("3. server %d:: Received RPC from %d\n", rf.me, args.LeaderID)
+		// fmt.Printf("3. server %d:: Received RPC from %d\n", rf.me, args.LeaderID)
 		// In case we receive an AppendEntries RPC from a server with a more
 		// up-to-date, consider it the leader of that term, update your term,
 		// and step down to Follower in case you're a Candidate with an ongoing
@@ -187,6 +188,7 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 			if rf.candidateLogMoreUpToDate(args.LastLogTerm, args.LastLogIndex) {
 				rf.votedFor[args.Term] = args.CandidateIndex
 				reply.VoteGranted = true
+				rf.requestVotesChannel <- reply
 			} else {
 				voteNotGrantedReason = fmt.Sprintf("My logs are more up-to-date that candidate %d!", args.CandidateIndex)
 				reply.VoteGranted = false
@@ -390,6 +392,10 @@ func (rf *Raft) electionTimeoutRoutine(electionTimeout int) {
 			// Breaking out of the select statement causes the timeout to be
 			// get reset which is important when we've received a heartbeat
 			// from the current leader.
+		case <-rf.requestVotesChannel:
+
+			fmt.Printf("server-%d:: electionTimeoutRoutine: Replied to Request Vote RPC. Resetting election timeout.\n", rf.me)
+
 		case <-time.After(time.Duration(electionTimeout) * time.Millisecond):
 			fmt.Printf("server-%d:: electionTimeoutRoutine: Hit election timeout %d! Initiating election.\n", rf.me, electionTimeout)
 			rf.mu.Lock()
@@ -439,14 +445,15 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.currentTerm = 0
 	rf.votedFor = make(map[int]int)
 	rf.appendEntriesChannel = make(chan *AppendEntriesReply)
+	rf.requestVotesChannel = make(chan *RequestVoteReply)
 	// Choosing a randomized timeout between 500 & 800 ms. This is because
 	// our AppendEntries RPC that is used as heartbeat is sent once per 100ms.
 	// If we haven't received even one heartbeat within 500ms, then we can declare
 	// the leader as dead and:
 	// increment our current term -> transition to CANDIDATE state -> initiate leader election
 	// -> wait for a vote from a of of followers.
-	min := 500
-	max := 800
+	min := 800
+	max := 1000
 	electionTimeout := rand.Intn(max-min+1) + min
 	fmt.Printf("server-%d:: Selected random timeout %d!\n", me, electionTimeout)
 	heartbeatTimeout := 100
