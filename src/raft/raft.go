@@ -147,7 +147,7 @@ func (rf *Raft) candidateLogMoreUpToDate(candidateLastLogTerm int, candidateLast
 
 func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply) {
 	rf.mu.Lock()
-	// fmt.Printf("server-%d:: AppendEntries from %d: Acquired Lock!\n", rf.me, args.LeaderID)
+	fmt.Printf("server-%d:: AppendEntries from %d of term %d: Acquired Lock!\n", rf.me, args.LeaderID, args.Term)
 
 	defer rf.mu.Unlock()
 	// fmt.Printf("1. server %d:: Received RPC from %d, len of args %d\n", rf.me, args.LeaderID, len(args.LogEntries))
@@ -183,14 +183,16 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 // example RequestVote RPC handler.
 func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	rf.mu.Lock()
-	// fmt.Printf("server-%d:: RequestVote: Acquired Lock!\n", rf.me)
+	fmt.Printf("server-%d:: RequestVote by %d: Acquired Lock!\n", rf.me, args.CandidateIndex)
 
-	defer rf.mu.Unlock()
+	// defer rf.mu.Unlock()
 	voteNotGrantedReason := ""
 	if args.Term < rf.currentTerm {
+		// fmt.Printf("Term of candidate server %d (%d) is less than my term (%d). Vote not granted not to %d for term %d!", args.CandidateIndex, args.Term, rf.currentTerm, args.CandidateIndex, args.Term)
 		voteNotGrantedReason = fmt.Sprintf("Term of candidate server %d (%d) is less than my term (%d). Vote not granted not to %d for term %d!", args.CandidateIndex, args.Term, rf.currentTerm, args.CandidateIndex, args.Term)
 		reply.Term = rf.currentTerm
 		reply.VoteGranted = false
+		rf.mu.Unlock()
 	} else {
 		reply.Term = args.Term
 		rf.currentTerm = args.Term
@@ -199,14 +201,21 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 			if rf.candidateLogMoreUpToDate(args.LastLogTerm, args.LastLogIndex) {
 				rf.votedFor[args.Term] = args.CandidateIndex
 				reply.VoteGranted = true
+				rf.mu.Unlock()
+				fmt.Printf("BEFORE: server-%d:: Reply to %d: VoteGranted: %t\n", rf.me, args.CandidateIndex, reply.VoteGranted)
 				rf.requestVotesChannel <- reply
+				fmt.Printf("AFTER: server-%d:: Reply to %d: VoteGranted: %t\n", rf.me, args.CandidateIndex, reply.VoteGranted)
 			} else {
+				fmt.Printf("My logs are more up-to-date that candidate %d!", args.CandidateIndex)
 				voteNotGrantedReason = fmt.Sprintf("My logs are more up-to-date that candidate %d!", args.CandidateIndex)
 				reply.VoteGranted = false
+				rf.mu.Unlock()
 			}
 		} else {
+			fmt.Printf("I have already voted for %d in term %d!", rf.votedFor[rf.currentTerm], rf.currentTerm)
 			voteNotGrantedReason = fmt.Sprintf("I have already voted for %d in term %d!", rf.votedFor[rf.currentTerm], rf.currentTerm)
 			reply.VoteGranted = false
+			rf.mu.Unlock()
 		}
 	}
 	if reply.VoteGranted {
@@ -214,6 +223,9 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	} else {
 		fmt.Printf("server-%d:: Vote NOT granted to %d for term %d! %s\n", rf.me, args.CandidateIndex, args.Term, voteNotGrantedReason)
 	}
+
+	fmt.Printf("server-%d:: Reply to %d: VoteGranted: %t\n", rf.me, args.CandidateIndex, reply.VoteGranted)
+
 	// fmt.Printf("server-%d:: RequestVote: Relinquished Lock!\n", rf.me)
 
 }
@@ -290,6 +302,7 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 // should call killed() to check whether it should stop.
 func (rf *Raft) Kill() {
 	atomic.StoreInt32(&rf.dead, 1)
+	// fmt.Printf("Server %d is dead\n", rf.me)
 	// Your code here, if desired.
 }
 
@@ -304,17 +317,17 @@ func (rf *Raft) sendAndHandleAppendEntries(term int, leaderId int, server int) {
 	// fmt.Printf("server-%d:: sendAndHandleAppendEntries: Sending AppendEntries RPC to %d!\n", rf.me, server)
 	ret := rf.sendAppendEntries(server, args, reply)
 	if ret {
-		rf.mu.Lock()
-		// fmt.Printf("server-%d:: sendAndHandleAppendEntries: Acquired Lock to send to %d!\n", rf.me, server)
-		if reply.Term > rf.currentTerm {
-			fmt.Printf("server-%d:: sendAndHandleAppendEntries: More up-to-date leader %d detected! Transitioning from %s -> %s.!\n", rf.me, server, rf.state, Follower.String())
-			rf.currentTerm = reply.Term
-			rf.state = Follower
-		}
-		rf.mu.Unlock()
+		// rf.mu.Lock()
+		// // fmt.Printf("server-%d:: sendAndHandleAppendEntries: Acquired Lock to send to %d!\n", rf.me, server)
+		// if reply.Term > rf.currentTerm {
+		// 	fmt.Printf("server-%d:: sendAndHandleAppendEntries: More up-to-date leader %d detected! Transitioning from %s -> %s.!\n", rf.me, server, rf.state, Follower.String())
+		// 	rf.currentTerm = reply.Term
+		// 	rf.state = Follower
+		// }
+		// rf.mu.Unlock()
 		// fmt.Printf("server-%d:: sendAndHandleAppendEntries: Relinquished Lock to send to %d!\n", rf.me, server)
 	} else {
-		// fmt.Printf("server-%d:: sendAndHandleAppendEntries: AppendEntries RPC response from %d timed out! It is probably dead.\n", rf.me, server)
+		fmt.Printf("server-%d:: sendAndHandleAppendEntries: AppendEntries RPC response for term %d from server %d timed out! It is probably dead.\n", rf.me, args.Term, server)
 	}
 }
 
@@ -322,6 +335,9 @@ func (rf *Raft) sendAndHandleRequestVote(term int, myIndex int, lastLogIndex int
 	args := &RequestVoteArgs{Term: term, CandidateIndex: myIndex, LastLogIndex: lastLogIndex, LastLogTerm: lastLogTerm}
 	reply := &RequestVoteReply{}
 	ret := rf.sendRequestVote(server, args, reply)
+	if !ret {
+		fmt.Printf("server-%d:: RequestVote RPC response from %d for term %d timed out! It is probably dead.\n", rf.me, server, term)
+	}
 	rf.mu.Lock()
 	// fmt.Printf("server-%d:: sendAndHandleRequestVote: Acquired Lock!\n", rf.me)
 
@@ -407,7 +423,7 @@ func (rf *Raft) sendHeartbeatIfLeader(heartbeatTimeout int) {
 	for !rf.killed() {
 		// fmt.Printf("server-%d:: trying to get state\n", rf.me)
 		term, isLeader := rf.GetState()
-		// fmt.Printf("server-%d:: term: %d and isLeader: %t.\n", rf.me, term, isLeader)
+		fmt.Printf("server-%d:: term: %d and isLeader: %t.\n", rf.me, term, isLeader)
 		if isLeader {
 			// fmt.Printf("server-%d:: Sending  assert authority as leader.\n", rf.me)
 			for index := range rf.peers {
@@ -427,7 +443,7 @@ func (rf *Raft) electionTimeoutRoutine(electionTimeout int) {
 
 		select {
 		case <-rf.appendEntriesChannel:
-			// fmt.Printf("server-%d:: electionTimeoutRoutine: Received AppendEntries RPC from current leader. Resetting election timeout.\n", rf.me)
+			fmt.Printf("server-%d:: electionTimeoutRoutine: Received AppendEntries RPC from current leader. Resetting election timeout.\n", rf.me)
 			// Breaking out of the select statement causes the timeout to be
 			// get reset which is important when we've received a heartbeat
 			// from the current leader.
@@ -499,8 +515,8 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	// the leader as dead and:
 	// increment our current term -> transition to CANDIDATE state -> initiate leader election
 	// -> wait for a vote from a of of followers.
-	min := 800
-	max := 1000
+	min := 300
+	max := 500
 	electionTimeout := rand.Intn(max-min+1) + min
 	fmt.Printf("server-%d:: Selected random timeout %d!\n", me, electionTimeout)
 	heartbeatTimeout := 100
