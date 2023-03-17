@@ -351,7 +351,8 @@ func (rf *Raft) sendAndHandleRequestVote(term int, myIndex int, lastLogIndex int
 
 }
 
-func (rf *Raft) performLeaderElection(peers []*labrpc.ClientEnd, myIndex int, term int, lastLogIndex int, lastLogTerm int) bool {
+func (rf *Raft) performLeaderElection(peers []*labrpc.ClientEnd, myIndex int, term int, lastLogIndex int, lastLogTerm int, electionTimeout int) bool {
+	fmt.Printf("server-%d:: electionTimeoutRoutine: Hit election timeout %d! Initiating election for term %d.\n", rf.me, electionTimeout, rf.currentTerm)
 	totalNodes := len(peers)
 	quorum := int(math.Ceil(float64(totalNodes) / 2))
 
@@ -440,7 +441,7 @@ func (rf *Raft) electionTimeoutRoutine(electionTimeout int) {
 			rf.mu.Lock()
 			// fmt.Printf("server-%d:: electionTimeoutRoutine (timeout): Acquired lock.\n", rf.me)
 			rf.currentTerm += 1
-			fmt.Printf("server-%d:: electionTimeoutRoutine: Hit election timeout %d! Initiating election for term %d.\n", rf.me, electionTimeout, rf.currentTerm)
+			// fmt.Printf("server-%d:: electionTimeoutRoutine: Hit election timeout %d! Initiating election for term %d.\n", rf.me, electionTimeout, rf.currentTerm)
 			rf.state = Candidate
 			curServerLastLogIndex := len(rf.log) - 1
 			curServerLastLogTerm := 0
@@ -451,7 +452,7 @@ func (rf *Raft) electionTimeoutRoutine(electionTimeout int) {
 			rf.mu.Unlock()
 			// fmt.Printf("server-%d:: electionTimeoutRoutine (timeout): Relinquished lock.\n", rf.me)
 
-			if !rf.killed() && rf.performLeaderElection(rf.peers, rf.me, curTerm, curServerLastLogIndex, curServerLastLogTerm) {
+			if !rf.killed() && rf.performLeaderElection(rf.peers, rf.me, curTerm, curServerLastLogIndex, curServerLastLogTerm, electionTimeout) {
 				rf.mu.Lock()
 				// fmt.Printf("server-%d:: electionTimeoutRoutine (timeout): Acquired lock.\n", rf.me)
 				fmt.Printf("server-%d:: I am the leader for term %d\n", rf.me, curTerm)
