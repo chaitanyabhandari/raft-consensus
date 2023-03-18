@@ -173,7 +173,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 		} else {
 			reply.Term = rf.currentTerm
 		}
-		// fmt.Printf("server-%d:: AppendEntries from %d: Reqlinquished Lock!\n", rf.me, args.LeaderID)
+		fmt.Printf("server-%d:: AppendEntries from %d: Reqlinquished Lock!\n", rf.me, args.LeaderID)
 		return
 	} else {
 		// Todo: Implement handling logic for appending logs
@@ -317,17 +317,17 @@ func (rf *Raft) sendAndHandleAppendEntries(term int, leaderId int, server int) {
 	// fmt.Printf("server-%d:: sendAndHandleAppendEntries: Sending AppendEntries RPC to %d!\n", rf.me, server)
 	ret := rf.sendAppendEntries(server, args, reply)
 	if ret {
-		// rf.mu.Lock()
-		// // fmt.Printf("server-%d:: sendAndHandleAppendEntries: Acquired Lock to send to %d!\n", rf.me, server)
-		// if reply.Term > rf.currentTerm {
-		// 	fmt.Printf("server-%d:: sendAndHandleAppendEntries: More up-to-date leader %d detected! Transitioning from %s -> %s.!\n", rf.me, server, rf.state, Follower.String())
-		// 	rf.currentTerm = reply.Term
-		// 	rf.state = Follower
-		// }
-		// rf.mu.Unlock()
+		rf.mu.Lock()
+		// fmt.Printf("server-%d:: sendAndHandleAppendEntries: Acquired Lock to send to %d!\n", rf.me, server)
+		if reply.Term > rf.currentTerm {
+			fmt.Printf("server-%d:: sendAndHandleAppendEntries: More up-to-date leader %d detected! Transitioning from %s -> %s.!\n", rf.me, server, rf.state, Follower.String())
+			rf.currentTerm = reply.Term
+			rf.state = Follower
+		}
+		rf.mu.Unlock()
 		// fmt.Printf("server-%d:: sendAndHandleAppendEntries: Relinquished Lock to send to %d!\n", rf.me, server)
 	} else {
-		fmt.Printf("server-%d:: sendAndHandleAppendEntries: AppendEntries RPC response for term %d from server %d timed out! It is probably dead.\n", rf.me, args.Term, server)
+		// fmt.Printf("server-%d:: sendAndHandleAppendEntries: AppendEntries RPC response for term %d from server %d timed out! It is probably dead.\n", rf.me, args.Term, server)
 	}
 }
 
@@ -398,6 +398,10 @@ func (rf *Raft) performLeaderElection(peers []*labrpc.ClientEnd, myIndex int, te
 			fmt.Printf("server-%d:: Received positive RequestVote RPC response for term %d! Total positive votes: %d\n", rf.me, term, numPositiveVotes)
 
 			if numPositiveVotes >= quorum {
+				rf.mu.Lock()
+				fmt.Printf("server-%d:: I am the leader for term %d\n", rf.me, rf.currentTerm)
+				rf.state = Leader
+				rf.mu.Unlock()
 				return true
 			} else if totalVotes == totalNodes {
 				// All "Raft.RequestVote" RPCs have completed, but the number
@@ -450,14 +454,22 @@ func (rf *Raft) electionTimeoutRoutine(electionTimeout int) {
 		case <-rf.requestVotesChannel:
 			fmt.Printf("server-%d:: electionTimeoutRoutine: Replied to Request Vote RPC. Resetting election timeout.\n", rf.me)
 		case <-time.After(time.Duration(electionTimeout) * time.Millisecond):
+
 			_, leader := rf.GetState()
 			if leader {
 				break
 			}
+
+			if !rf.killed() {
+				fmt.Printf("server-%d:: electionTimeoutRoutine: Just had election timeout.\n", rf.me)
+			}
+
 			rf.mu.Lock()
 			// fmt.Printf("server-%d:: electionTimeoutRoutine (timeout): Acquired lock.\n", rf.me)
 			rf.currentTerm += 1
-			// fmt.Printf("server-%d:: electionTimeoutRoutine: Hit election timeout %d! Initiating election for term %d.\n", rf.me, electionTimeout, rf.currentTerm)
+			if !rf.killed() {
+				fmt.Printf("server-%d:: electionTimeoutRoutine: Hit election timeout %d! Initiating election for term %d.\n", rf.me, electionTimeout, rf.currentTerm)
+			}
 			rf.state = Candidate
 			curServerLastLogIndex := len(rf.log) - 1
 			curServerLastLogTerm := 0
@@ -468,12 +480,16 @@ func (rf *Raft) electionTimeoutRoutine(electionTimeout int) {
 			rf.mu.Unlock()
 			// fmt.Printf("server-%d:: electionTimeoutRoutine (timeout): Relinquished lock.\n", rf.me)
 
-			if !rf.killed() && rf.performLeaderElection(rf.peers, rf.me, curTerm, curServerLastLogIndex, curServerLastLogTerm, electionTimeout) {
-				rf.mu.Lock()
+			if !rf.killed() {
+				// Perform leader election in a Go routine so that the timer restarts and does not wait for the result of the leader election.
+				// This is applicable for the case when no leader is able to get a majority as majority of the nodes are disconnected so election is not able to 'finish' i.e. we do not receive a majority of votes nor the responses from all nodes.
+				// In such a case, we need to start a re-election after a timeout (which we are now doing since we have leader election in a separate go routine).
+				go rf.performLeaderElection(rf.peers, rf.me, curTerm, curServerLastLogIndex, curServerLastLogTerm, electionTimeout)
+				// rf.mu.Lock()
 				// fmt.Printf("server-%d:: electionTimeoutRoutine (timeout): Acquired lock.\n", rf.me)
-				fmt.Printf("server-%d:: I am the leader for term %d\n", rf.me, curTerm)
-				rf.state = Leader
-				rf.mu.Unlock()
+				// fmt.Printf("server-%d:: I am the leader for term %d\n", rf.me, curTerm)
+				// rf.state = Leader
+				// rf.mu.Unlock()
 				// fmt.Printf("server-%d:: electionTimeoutRoutine (timeout): Relinquished lock.\n", rf.me)
 
 			}
