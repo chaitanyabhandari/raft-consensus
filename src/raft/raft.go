@@ -147,7 +147,7 @@ func (rf *Raft) candidateLogMoreUpToDate(candidateLastLogTerm int, candidateLast
 
 func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply) {
 	rf.mu.Lock()
-	fmt.Printf("server-%d:: AppendEntries from %d of term %d: Acquired Lock!\n", rf.me, args.LeaderID, args.Term)
+	// fmt.Printf("server-%d:: AppendEntries from %d of term %d: Acquired Lock!\n", rf.me, args.LeaderID, args.Term)
 
 	defer rf.mu.Unlock()
 	// fmt.Printf("1. server %d:: Received RPC from %d, len of args %d\n", rf.me, args.LeaderID, len(args.LogEntries))
@@ -173,7 +173,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 		} else {
 			reply.Term = rf.currentTerm
 		}
-		fmt.Printf("server-%d:: AppendEntries from %d: Reqlinquished Lock!\n", rf.me, args.LeaderID)
+		// fmt.Printf("server-%d:: AppendEntries from %d: Reqlinquished Lock!\n", rf.me, args.LeaderID)
 		return
 	} else {
 		// Todo: Implement handling logic for appending logs
@@ -183,7 +183,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 // example RequestVote RPC handler.
 func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	rf.mu.Lock()
-	fmt.Printf("server-%d:: RequestVote by %d: Acquired Lock!\n", rf.me, args.CandidateIndex)
+	// fmt.Printf("server-%d:: RequestVote by %d: Acquired Lock!\n", rf.me, args.CandidateIndex)
 
 	// defer rf.mu.Unlock()
 	voteNotGrantedReason := ""
@@ -202,9 +202,9 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 				rf.votedFor[args.Term] = args.CandidateIndex
 				reply.VoteGranted = true
 				rf.mu.Unlock()
-				fmt.Printf("BEFORE: server-%d:: Reply to %d: VoteGranted: %t\n", rf.me, args.CandidateIndex, reply.VoteGranted)
+				// fmt.Printf("BEFORE: server-%d:: Reply to %d: VoteGranted: %t\n", rf.me, args.CandidateIndex, reply.VoteGranted)
 				rf.requestVotesChannel <- reply
-				fmt.Printf("AFTER: server-%d:: Reply to %d: VoteGranted: %t\n", rf.me, args.CandidateIndex, reply.VoteGranted)
+				// fmt.Printf("AFTER: server-%d:: Reply to %d: VoteGranted: %t\n", rf.me, args.CandidateIndex, reply.VoteGranted)
 			} else {
 				fmt.Printf("My logs are more up-to-date that candidate %d!", args.CandidateIndex)
 				voteNotGrantedReason = fmt.Sprintf("My logs are more up-to-date that candidate %d!", args.CandidateIndex)
@@ -224,7 +224,7 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 		fmt.Printf("server-%d:: Vote NOT granted to %d for term %d! %s\n", rf.me, args.CandidateIndex, args.Term, voteNotGrantedReason)
 	}
 
-	fmt.Printf("server-%d:: Reply to %d: VoteGranted: %t\n", rf.me, args.CandidateIndex, reply.VoteGranted)
+	// fmt.Printf("server-%d:: Reply to %d: VoteGranted: %t\n", rf.me, args.CandidateIndex, reply.VoteGranted)
 
 	// fmt.Printf("server-%d:: RequestVote: Relinquished Lock!\n", rf.me)
 
@@ -355,7 +355,7 @@ func (rf *Raft) sendAndHandleRequestVote(term int, myIndex int, lastLogIndex int
 		} else {
 			positiveVotes <- true
 		}
-		fmt.Printf("server-%d:: Received RequestVote RPC response from %d. VotedFor: %t, Term: %d.\n", rf.me, server, reply.VoteGranted, reply.Term)
+		fmt.Printf("server-%d:: RequestVote RPC response from %d for term %d. VotedFor: %t\n", rf.me, server, reply.Term, reply.VoteGranted)
 	} else {
 		// We we go into else if the RPC returns false, this only happens when
 		// the network is lossy or the server that we're sending an RPC to is down.
@@ -380,6 +380,7 @@ func (rf *Raft) performLeaderElection(peers []*labrpc.ClientEnd, myIndex int, te
 			rf.mu.Lock()
 			// fmt.Printf("server-%d:: performLeaderElection: Acquired Lock!\n", rf.me)
 			rf.votedFor[term] = myIndex
+			fmt.Printf("server-%d:: Vote granted to %d for term %d!\n", rf.me, rf.me, term)
 			positiveVotes <- true
 			rf.mu.Unlock()
 			// fmt.Printf("server-%d:: performLeaderElection: Relinquished Lock!\n", rf.me)
@@ -395,7 +396,7 @@ func (rf *Raft) performLeaderElection(peers []*labrpc.ClientEnd, myIndex int, te
 		case <-positiveVotes:
 			totalVotes++
 			numPositiveVotes++
-			fmt.Printf("server-%d:: Received positive RequestVote RPC response for term %d! Total positive votes: %d\n", rf.me, term, numPositiveVotes)
+			// fmt.Printf("server-%d:: Received positive RequestVote RPC response for term %d! Total positive votes: %d\n", rf.me, term, numPositiveVotes)
 
 			if numPositiveVotes >= quorum {
 				rf.mu.Lock()
@@ -427,7 +428,7 @@ func (rf *Raft) sendHeartbeatIfLeader(heartbeatTimeout int) {
 	for !rf.killed() {
 		// fmt.Printf("server-%d:: trying to get state\n", rf.me)
 		term, isLeader := rf.GetState()
-		fmt.Printf("server-%d:: term: %d and isLeader: %t.\n", rf.me, term, isLeader)
+		// fmt.Printf("server-%d:: term: %d and isLeader: %t.\n", rf.me, term, isLeader)
 		if isLeader {
 			// fmt.Printf("server-%d:: Sending  assert authority as leader.\n", rf.me)
 			for index := range rf.peers {
@@ -447,29 +448,29 @@ func (rf *Raft) electionTimeoutRoutine(electionTimeout int) {
 
 		select {
 		case <-rf.appendEntriesChannel:
-			fmt.Printf("server-%d:: electionTimeoutRoutine: Received AppendEntries RPC from current leader. Resetting election timeout.\n", rf.me)
+			// fmt.Printf("server-%d:: electionTimeoutRoutine: Received AppendEntries RPC from current leader. Resetting election timeout.\n", rf.me)
 			// Breaking out of the select statement causes the timeout to be
 			// get reset which is important when we've received a heartbeat
 			// from the current leader.
 		case <-rf.requestVotesChannel:
-			fmt.Printf("server-%d:: electionTimeoutRoutine: Replied to Request Vote RPC. Resetting election timeout.\n", rf.me)
-		case <-time.After(time.Duration(electionTimeout) * time.Millisecond):
+			// fmt.Printf("server-%d:: electionTimeoutRoutine: Replied to Request Vote RPC. Resetting election timeout.\n", rf.me)
+		case <-time.After(time.Duration(electionTimeout)*time.Millisecond + time.Duration(rand.Intn(20))*time.Millisecond):
 
 			_, leader := rf.GetState()
 			if leader {
 				break
 			}
 
-			if !rf.killed() {
-				fmt.Printf("server-%d:: electionTimeoutRoutine: Just had election timeout.\n", rf.me)
-			}
+			// if !rf.killed() {
+			// 	fmt.Printf("server-%d:: electionTimeoutRoutine: Just had election timeout.\n", rf.me)
+			// }
 
 			rf.mu.Lock()
 			// fmt.Printf("server-%d:: electionTimeoutRoutine (timeout): Acquired lock.\n", rf.me)
 			rf.currentTerm += 1
-			if !rf.killed() {
-				fmt.Printf("server-%d:: electionTimeoutRoutine: Hit election timeout %d! Initiating election for term %d.\n", rf.me, electionTimeout, rf.currentTerm)
-			}
+			// if !rf.killed() {
+			// 	fmt.Printf("server-%d:: electionTimeoutRoutine: Hit election timeout %d! Initiating election for term %d.\n", rf.me, electionTimeout, rf.currentTerm)
+			// }
 			rf.state = Candidate
 			curServerLastLogIndex := len(rf.log) - 1
 			curServerLastLogTerm := 0
@@ -485,24 +486,7 @@ func (rf *Raft) electionTimeoutRoutine(electionTimeout int) {
 				// This is applicable for the case when no leader is able to get a majority as majority of the nodes are disconnected so election is not able to 'finish' i.e. we do not receive a majority of votes nor the responses from all nodes.
 				// In such a case, we need to start a re-election after a timeout (which we are now doing since we have leader election in a separate go routine).
 				go rf.performLeaderElection(rf.peers, rf.me, curTerm, curServerLastLogIndex, curServerLastLogTerm, electionTimeout)
-				// rf.mu.Lock()
-				// fmt.Printf("server-%d:: electionTimeoutRoutine (timeout): Acquired lock.\n", rf.me)
-				// fmt.Printf("server-%d:: I am the leader for term %d\n", rf.me, curTerm)
-				// rf.state = Leader
-				// rf.mu.Unlock()
-				// fmt.Printf("server-%d:: electionTimeoutRoutine (timeout): Relinquished lock.\n", rf.me)
-
 			}
-			// default:
-			// 	// Let's relinquish the lock for about 100ms so that the system can
-			// 	// make progress. I haven't given too much thought to the sleep
-			// 	// time, so we can think about it harder and change it to a more
-			// 	// appropriate value. But the main intention here is that we shouldn't
-			// 	// be waiting on rf.appendEntriesChannel indefinitely since we would
-			// 	// then be holding a lock on it indefinitely.
-			// 	fmt.Printf("server-%d:: electionTimeoutRoutine: No timeouts or channel messages.\n", rf.me)
-			// 	rf.mu.Unlock()
-			// 	time.Sleep(100 * time.Millisecond)
 		}
 	}
 }
