@@ -168,7 +168,6 @@ func (rf *Raft) prefixMatches(leaderLastLogTerm int, leaderLastLogIndex int) boo
 
 func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply) {
 	rf.mu.Lock()
-	// fmt.Printf("server-%d:: AppendEntries from %d of term %d: Acquired Lock!\n", rf.me, args.LeaderID, args.Term)
 
 	defer rf.mu.Unlock()
 	if rf.currentTerm <= args.Term {
@@ -188,6 +187,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 		// RPC is received from a less up-to-date server. In this case, we should
 		// reject this RPC and send our current term so that the sender can
 		// update their curren term.
+		fmt.Printf("server-%d:: AppendEntries from %d of term %d, my term: %d. Rejecting RPC!\n", rf.me, args.LeaderID, args.Term, rf.currentTerm)
 		reply.Term = rf.currentTerm
 		reply.Appended = false
 		return
@@ -217,7 +217,9 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	if args.CommitIndex > rf.commitIndex {
 		lastIndex := len(rf.log) - 1
 		rf.commitIndex = int(math.Min(float64(args.CommitIndex), float64(lastIndex)))
-		fmt.Printf("server-%d:: Applying commands from lastApplied (%d) to commitIndex (%d)!\n", rf.me, rf.lastApplied+1, rf.commitIndex)
+		if rf.lastApplied+1 <= rf.commitIndex {
+			fmt.Printf("server-%d:: AppendEntries handler (from %d): Applying commands from lastApplied (%d) to commitIndex (%d)!\n", rf.me, args.LeaderID, rf.lastApplied+1, rf.commitIndex)
+		}
 		for logIdx := rf.lastApplied + 1; logIdx <= rf.commitIndex; logIdx++ {
 			rf.applyCh <- ApplyMsg{CommandValid: true, CommandIndex: logIdx + 1, Command: rf.log[logIdx].Command}
 		}
@@ -322,7 +324,7 @@ func (rf *Raft) performLogReplication(peers []*labrpc.ClientEnd, command interfa
 	for server := range rf.peers {
 		rf.mu.Lock()
 		if server != rf.me {
-			go rf.sendAndHandleAppendEntriesReplication(term, rf.me, index, server, appended, stepDown)
+			go rf.sendAndHandleAppendEntriesReplication(index, server, appended, stepDown)
 		}
 		rf.mu.Unlock()
 	}
@@ -340,7 +342,9 @@ func (rf *Raft) performLogReplication(peers []*labrpc.ClientEnd, command interfa
 				// on a majority of servers.
 				if rf.currentTerm == term {
 					rf.commitIndex = index
-					fmt.Printf("server-%d:: Applying commands from lastApplied (%d) to commitIndex (%d)!\n", rf.me, rf.lastApplied+1, rf.commitIndex)
+					if rf.lastApplied+1 <= rf.commitIndex {
+						fmt.Printf("server-%d:: performLogReplication: Applying commands from lastApplied (%d) to commitIndex (%d)!\n", rf.me, rf.lastApplied+1, rf.commitIndex)
+					}
 					for logIdx := rf.lastApplied + 1; logIdx <= rf.commitIndex; logIdx++ {
 						rf.applyCh <- ApplyMsg{CommandValid: true, CommandIndex: logIdx + 1, Command: rf.log[logIdx].Command}
 					}
@@ -421,9 +425,11 @@ func (rf *Raft) stepDownIfOutdated(term int) bool {
 	return false
 }
 
-func (rf *Raft) constructPayload(server int, decrementNextIndex bool, args *AppendEntriesArgs) {
+func (rf *Raft) constructPayload(server int, decrementNextIndex bool) (*AppendEntriesArgs, *AppendEntriesReply) {
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
+	args := &AppendEntriesArgs{Term: rf.currentTerm, LeaderID: rf.me}
+	reply := &AppendEntriesReply{}
 	if decrementNextIndex {
 		rf.nextIndex[server]--
 	}
@@ -439,11 +445,11 @@ func (rf *Raft) constructPayload(server int, decrementNextIndex bool, args *Appe
 	args.LeaderID = rf.me
 	fmt.Printf("server-%d:: sendAndHandleAppendEntriesReplication: Payload to be sent to %d: PrevLogIndex - %d, PrevLogTerm - %d, Commit Index - %d, LogEntries: ", rf.me, server, prevLogIndex, prevLogTerm, rf.commitIndex)
 	fmt.Println(args.LogEntries)
+	return args, reply
 }
 
-func (rf *Raft) sendAndHandleAppendEntriesReplication(term int, leaderId int, index int, server int, appended chan bool, stepDown chan bool) {
-	args := &AppendEntriesArgs{Term: term, LeaderID: leaderId}
-	reply := &AppendEntriesReply{}
+func (rf *Raft) sendAndHandleAppendEntriesReplication(index int, server int, appended chan bool, stepDown chan bool) {
+
 	decrementNextIndex := false
 	// The server shouldn't keep sending AppendEntries if it's not the leader. We do check in
 	// the Start() method, whether the server is the leader when it receives the log replication
@@ -457,7 +463,7 @@ func (rf *Raft) sendAndHandleAppendEntriesReplication(term int, leaderId int, in
 	// entry. stepDownIfOutdated should ensure this, as when we reconnect to the network,
 	// a majority of more up-to-date servers will reject its AppendEntries RPC.
 	for {
-		rf.constructPayload(server, decrementNextIndex, args)
+		args, reply := rf.constructPayload(server, decrementNextIndex)
 		ret := rf.sendAppendEntries(server, args, reply)
 		if ret {
 			_, isLeader := rf.GetState()
