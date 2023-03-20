@@ -116,6 +116,23 @@ func (rf *Raft) GetState() (int, bool) {
 	return term, isleader
 }
 
+func (rf *Raft) GetStateAndLogLength() (int, bool, int) {
+	// fmt.Printf("server-%d:: GetState: Acquired lock.\n", rf.me)
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
+	var term int
+	var isleader bool
+	term = rf.currentTerm
+	if rf.state == Leader {
+		isleader = true
+	} else {
+		isleader = false
+	}
+	// fmt.Printf("server-%d:: GetStat: Relinquished lock.\n", rf.me)
+
+	return term, isleader, len(rf.log)
+}
+
 // example RequestVote RPC arguments structure.
 // field names must start with capital letters!
 type RequestVoteArgs struct {
@@ -168,8 +185,9 @@ func (rf *Raft) prefixMatches(leaderLastLogTerm int, leaderLastLogIndex int) boo
 
 func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply) {
 	rf.mu.Lock()
-
 	defer rf.mu.Unlock()
+	// fmt.Printf("server-%d:: AppendEntries from %d of term %d, my term: %d!\n", rf.me, args.LeaderID, args.Term, rf.currentTerm)
+
 	if rf.currentTerm <= args.Term {
 		rf.currentTerm = args.Term
 		if rf.state == Candidate || rf.state == Leader {
@@ -182,12 +200,12 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 		// the election timeout goroutine to reset the timer. For now, let's assume
 		// that we need to reset this election timer regardless of the type of
 		// AppendEntries RPC is received (heartbeat/replication).
+
 		rf.appendEntriesChannel <- reply
 	} else {
 		// RPC is received from a less up-to-date server. In this case, we should
 		// reject this RPC and send our current term so that the sender can
 		// update their curren term.
-		fmt.Printf("server-%d:: AppendEntries from %d of term %d, my term: %d. Rejecting RPC!\n", rf.me, args.LeaderID, args.Term, rf.currentTerm)
 		reply.Term = rf.currentTerm
 		reply.Appended = false
 		return
@@ -213,6 +231,8 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 			fmt.Println(rf.log)
 			reply.Appended = true
 		}
+	} else {
+		reply.Appended = true
 	}
 	if args.CommitIndex > rf.commitIndex {
 		lastIndex := len(rf.log) - 1
@@ -315,18 +335,33 @@ func (rf *Raft) sendAppendEntries(server int, args *AppendEntriesArgs, reply *Ap
 	return ok
 }
 
-func (rf *Raft) performLogReplication(peers []*labrpc.ClientEnd, command interface{}, term int, index int) {
+func (rf *Raft) sendHeartbeatIfLeader(heartbeatTimeout int) {
+	for !rf.killed() {
+		// fmt.Printf("server-%d:: trying to get state\n", rf.me)
+		_, isLeader, logLength := rf.GetStateAndLogLength()
+		// fmt.Printf("server-%d:: sendHeartbeatIfLeader: term: %d and isLeader: %t.\n", rf.me, term, isLeader)
+		if isLeader {
+			// fmt.Printf("server-%d:: Sending assert authority as leader.\n", rf.me)
+			for server := range rf.peers {
+				if server != rf.me {
+					go rf.sendAndHandleAppendEntries(logLength-1, server, nil, nil, true)
+				}
+			}
+		}
+		time.Sleep(time.Duration(heartbeatTimeout) * time.Millisecond)
+	}
+}
+
+func (rf *Raft) performLogReplication(peers []*labrpc.ClientEnd, command interface{}, term int, index int, leaderID int) {
 	totalNodes := len(peers)
 	quorum := int(math.Ceil(float64(totalNodes) / 2))
 	appended := make(chan bool, totalNodes)
 	appended <- true
 	stepDown := make(chan bool, totalNodes)
-	for server := range rf.peers {
-		rf.mu.Lock()
-		if server != rf.me {
-			go rf.sendAndHandleAppendEntriesReplication(index, server, appended, stepDown)
+	for server := range peers {
+		if server != leaderID {
+			go rf.sendAndHandleAppendEntries(index, server, appended, stepDown, false)
 		}
-		rf.mu.Unlock()
 	}
 
 	totalAppended := 0
@@ -334,9 +369,9 @@ func (rf *Raft) performLogReplication(peers []*labrpc.ClientEnd, command interfa
 		select {
 		case <-appended:
 			totalAppended++
-			fmt.Printf("server-%d:: Received positive AppendEntries RPC response for term %d! Total positive responses: %d\n", rf.me, term, totalAppended)
+			// fmt.Printf("server-%d:: Received positive AppendEntries RPC response for term %d! Total positive responses: %d\n", rf.me, term, totalAppended)
 			if totalAppended >= quorum {
-				fmt.Printf("server-%d:: Successfully replicated command on a majority of servers!\n", rf.me)
+				fmt.Printf("server-%d:: Successfully replicated command at index %d a majority of servers!\n", rf.me, index)
 				rf.mu.Lock()
 				// This leader will only commmit entries if it has replicated at least one command in this term
 				// on a majority of servers.
@@ -382,14 +417,15 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	} else {
 		isLeader = false
 	}
-	index := len(rf.log)
-	fmt.Printf("server-%d:: Start - term: %d, isLeader: %t, index: %d,command:", rf.me, term, isLeader, index)
-	fmt.Println(command)
+	index := rf.nextIndex[rf.me]
 
 	if isLeader {
 		// Leader appends the command to it's log and starts agreement
+		fmt.Printf("server-%d:: Start - term: %d, isLeader: %t, index: %d,command:", rf.me, term, isLeader, index)
+		fmt.Println(command)
 		rf.log = append(rf.log, LogEntry{Command: command, Term: term})
-		go rf.performLogReplication(rf.peers, command, term, index)
+		rf.nextIndex[rf.me]++
+		go rf.performLogReplication(rf.peers, command, term, index, rf.me)
 	}
 	return index + 1, term, isLeader
 }
@@ -425,9 +461,11 @@ func (rf *Raft) stepDownIfOutdated(term int) bool {
 	return false
 }
 
-func (rf *Raft) constructPayload(server int, decrementNextIndex bool) (*AppendEntriesArgs, *AppendEntriesReply) {
+func (rf *Raft) constructPayload(targetIndex int, server int, decrementNextIndex bool, heartbeat bool, _type string) (*AppendEntriesArgs, *AppendEntriesReply) {
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
+	// fmt.Printf("server-%d:: %s Append Entries: Constructing Payload to be sent to %d: targetIndex - %d\n ", rf.me, _type, server, targetIndex)
+
 	args := &AppendEntriesArgs{Term: rf.currentTerm, LeaderID: rf.me}
 	reply := &AppendEntriesReply{}
 	if decrementNextIndex {
@@ -440,54 +478,81 @@ func (rf *Raft) constructPayload(server int, decrementNextIndex bool) (*AppendEn
 	}
 	args.PrevLogIndex = prevLogIndex
 	args.PrevLogTerm = prevLogTerm
-	args.LogEntries = rf.log[prevLogIndex+1:]
+
+	// We require this check because another parallel AppendEntries RPC for a
+	//  targetIndex' > targetIndex might have already replicated all the logs up till
+	// the targetIndex'. In that case, rf.nextIndex[server] would already
+	// be > targetIndex. [A1, B1, C1]
+
+	if rf.nextIndex[server] <= targetIndex {
+		args.LogEntries = rf.log[rf.nextIndex[server] : targetIndex+1]
+	} else {
+		args.LogEntries = make([]LogEntry, 0)
+	}
+	fmt.Printf("server-%d:: %s Append Entries to %d:  nextIndex - %d, targetIndex - %d\n", rf.me, _type, server, rf.nextIndex[server], targetIndex)
 	args.CommitIndex = rf.commitIndex
 	args.LeaderID = rf.me
-	fmt.Printf("server-%d:: sendAndHandleAppendEntriesReplication: Payload to be sent to %d: PrevLogIndex - %d, PrevLogTerm - %d, Commit Index - %d, LogEntries: ", rf.me, server, prevLogIndex, prevLogTerm, rf.commitIndex)
-	fmt.Println(args.LogEntries)
+	fmt.Printf("server-%d:: %s Append Entries: Payload to be sent to %d:  ", rf.me, _type, server)
+	fmt.Println(args)
 	return args, reply
 }
 
-func (rf *Raft) sendAndHandleAppendEntriesReplication(index int, server int, appended chan bool, stepDown chan bool) {
-
+func (rf *Raft) sendAndHandleAppendEntries(index int, server int, appended chan bool, stepDown chan bool, heartbeat bool) {
 	decrementNextIndex := false
 	// The server shouldn't keep sending AppendEntries if it's not the leader. We do check in
-	// the Start() method, whether the server is the leader when it receives the log replication
+	// the Start() method whether the server is the leader when it receives the log replication
 	// request. A server may be disconnected from all the other servers and may think it's the
 	// leader, and so if a client sends an AppendEntries RPC request to this server, it will
-	// call sendAndHandleAppendEntriesReplication and start the replication process. Now,
+	// call sendAndHandleAppendEntries and start the replication process. Now,
 	// since this server is disconnected from all other servers, it will never get a majority
 	// and it wouldn't be able to commit anything, even if it replicates things in a non-majority
 	// number of servers. Eventually, when it connects back to the network, it will step down and
 	// become a FOLLOWER and it should stop sending AppendEntries in an attempt to replicate the
 	// entry. stepDownIfOutdated should ensure this, as when we reconnect to the network,
 	// a majority of more up-to-date servers will reject its AppendEntries RPC.
+	_type := "REPLICATION"
+	if heartbeat {
+		_type = "HEARTBEAT"
+	}
 	for {
-		args, reply := rf.constructPayload(server, decrementNextIndex)
+		args, reply := rf.constructPayload(index, server, decrementNextIndex, heartbeat, _type)
 		ret := rf.sendAppendEntries(server, args, reply)
-		if ret {
-			_, isLeader := rf.GetState()
-			if !isLeader {
+		_, isLeader := rf.GetState()
+		if !isLeader {
+			if !heartbeat {
 				stepDown <- true
-				return
 			}
+			return
+		}
+		if ret {
 			if rf.stepDownIfOutdated(reply.Term) {
-				fmt.Printf("server-%d:: sendAndHandleAppendEntriesReplication: More up-to-date server %d detected! Transitioning from %s -> %s.!\n", rf.me, server, rf.state, Follower.String())
-				stepDown <- true
+				fmt.Printf("server-%d:: %s Append Entries: More up-to-date server %d detected! Transitioning from %s -> %s.!\n", rf.me, _type, server, rf.state, Follower.String())
+				if !heartbeat {
+					stepDown <- true
+				}
 				return
 			}
 			if reply.Appended {
-				rf.mu.Lock()
-				defer rf.mu.Unlock()
-				rf.nextIndex[server] = index + 1
-				appended <- true
+				if len(args.LogEntries) > 0 {
+					rf.mu.Lock()
+					// fmt.Printf("server-%d:: %s Append Entries response from %d : Log entries appended: ", rf.me, _type, server)
+					// fmt.Println(args.LogEntries)
+					rf.nextIndex[server] = index + 1
+					rf.mu.Unlock()
+				}
+				if !heartbeat {
+					appended <- true
+				}
 				return
 			} else {
 				decrementNextIndex = true
-				fmt.Printf("server-%d:: sendAndHandleAppendEntriesReplication: Log predix match at server %d failed! Reconstructing payload and resending AppendEntries RPC!\n", rf.me, server)
+				fmt.Printf("server-%d:: %s Append Entries response from %d: Log prefix matchfailed! Reconstructing payload and resending AppendEntries RPC!\n", rf.me, _type, server)
 			}
 		} else {
-			fmt.Printf("server-%d:: sendAndHandleAppendEntriesReplication: AppendEntries RPC response for term %d from server %d timed out! It is probably dead.\n", rf.me, args.Term, server)
+			fmt.Printf("server-%d:: %s Append Entries: AppendEntries RPC response for term %d from server %d timed out! It is probably dead.\n", rf.me, _type, args.Term, server)
+			if heartbeat {
+				return
+			}
 		}
 	}
 }
@@ -608,7 +673,7 @@ func (rf *Raft) performLeaderElection(peers []*labrpc.ClientEnd, myIndex int, te
 	}
 }
 
-func (rf *Raft) sendHeartbeatIfLeader(heartbeatTimeout int) {
+func (rf *Raft) sendHeartbeatIfLeaderDeprecated(heartbeatTimeout int) {
 	for !rf.killed() {
 		// fmt.Printf("server-%d:: trying to get state\n", rf.me)
 		term, isLeader := rf.GetState()
