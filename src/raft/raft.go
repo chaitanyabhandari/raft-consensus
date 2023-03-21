@@ -18,6 +18,7 @@ package raft
 //
 
 import (
+	"encoding/json"
 	"fmt"
 	"math"
 	"math/rand"
@@ -133,6 +134,23 @@ func (rf *Raft) GetStateAndLogLength() (int, bool, int) {
 	return term, isleader, len(rf.log)
 }
 
+func (rf *Raft) GetStateAndNextIndex(server int) (int, bool, int) {
+	// fmt.Printf("server-%d:: GetState: Acquired lock.\n", rf.me)
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
+	var term int
+	var isleader bool
+	term = rf.currentTerm
+	if rf.state == Leader {
+		isleader = true
+	} else {
+		isleader = false
+	}
+	// fmt.Printf("server-%d:: GetStat: Relinquished lock.\n", rf.me)
+
+	return term, isleader, rf.nextIndex[server]
+}
+
 // example RequestVote RPC arguments structure.
 // field names must start with capital letters!
 type RequestVoteArgs struct {
@@ -212,13 +230,12 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	}
 	// fmt.Printf("1. server %d:: Received RPC from %d, len of args %d\n", rf.me, args.LeaderID, len(args.LogEntries))
 
-	if len(args.LogEntries) > 0 {
-		fmt.Printf("server-%d:: Received AppendEntries RPC from %d: PrevLogIndex - %d, PrevLogTerm - %d, Commit Index - %d, LogEntries: ", rf.me, args.LeaderID, args.PrevLogIndex, args.PrevLogTerm, args.CommitIndex)
-		fmt.Println(args.LogEntries)
-		if !rf.prefixMatches(args.PrevLogTerm, args.PrevLogIndex) {
-			reply.Appended = false
-			return
-		} else {
+	if !rf.prefixMatches(args.PrevLogTerm, args.PrevLogIndex) {
+		reply.Appended = false
+		return
+	} else {
+		if len(args.LogEntries) > 0 {
+			fmt.Printf("server-%d:: Received AppendEntries RPC from %d: PrevLogIndex - %d, PrevLogTerm - %d, Commit Index - %d, LogEntries: %v\n", rf.me, args.LeaderID, args.PrevLogIndex, args.PrevLogTerm, args.CommitIndex, args.LogEntries)
 			targetIndex := args.PrevLogIndex + 1
 			if len(rf.log) > targetIndex {
 				rf.log = rf.log[:targetIndex]
@@ -229,9 +246,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 			rf.log = append(rf.log, args.LogEntries...)
 			fmt.Printf("server-%d:: Log after append: ", rf.me)
 			fmt.Println(rf.log)
-			reply.Appended = true
 		}
-	} else {
 		reply.Appended = true
 	}
 	if args.CommitIndex > rf.commitIndex {
@@ -461,7 +476,7 @@ func (rf *Raft) stepDownIfOutdated(term int) bool {
 	return false
 }
 
-func (rf *Raft) constructPayload(targetIndex int, server int, decrementNextIndex bool, heartbeat bool, _type string) (*AppendEntriesArgs, *AppendEntriesReply) {
+func (rf *Raft) constructPayload(targetIndex int, server int, decrementNextIndex bool, _type string) (*AppendEntriesArgs, *AppendEntriesReply) {
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
 	// fmt.Printf("server-%d:: %s Append Entries: Constructing Payload to be sent to %d: targetIndex - %d\n ", rf.me, _type, server, targetIndex)
@@ -492,8 +507,9 @@ func (rf *Raft) constructPayload(targetIndex int, server int, decrementNextIndex
 	fmt.Printf("server-%d:: %s Append Entries to %d:  nextIndex - %d, targetIndex - %d\n", rf.me, _type, server, rf.nextIndex[server], targetIndex)
 	args.CommitIndex = rf.commitIndex
 	args.LeaderID = rf.me
-	fmt.Printf("server-%d:: %s Append Entries: Payload to be sent to %d:  ", rf.me, _type, server)
-	fmt.Println(args)
+	res, _ := json.Marshal(args)
+
+	fmt.Printf("server-%d:: %s Append Entries: Payload to be sent to %d:  %s\n", rf.me, _type, server, string(res))
 	return args, reply
 }
 
@@ -515,15 +531,24 @@ func (rf *Raft) sendAndHandleAppendEntries(index int, server int, appended chan 
 		_type = "HEARTBEAT"
 	}
 	for {
-		args, reply := rf.constructPayload(index, server, decrementNextIndex, heartbeat, _type)
-		ret := rf.sendAppendEntries(server, args, reply)
-		_, isLeader := rf.GetState()
+		_, isLeader, nextIndex := rf.GetStateAndNextIndex(server)
 		if !isLeader {
 			if !heartbeat {
 				stepDown <- true
 			}
 			return
 		}
+		if !heartbeat {
+			// I can't replicate the entry at index
+			if nextIndex < index {
+				fmt.Printf("server-%d:: %s Append Entries to %d: I can't replicate the entry at index %d, nextIndex is %d!\n", rf.me, _type, server, index, rf.nextIndex[server])
+				time.Sleep(time.Duration(500) * time.Millisecond)
+				continue
+			}
+		}
+		args, reply := rf.constructPayload(index, server, decrementNextIndex, _type)
+		ret := rf.sendAppendEntries(server, args, reply)
+
 		if ret {
 			if rf.stepDownIfOutdated(reply.Term) {
 				fmt.Printf("server-%d:: %s Append Entries: More up-to-date server %d detected! Transitioning from %s -> %s.!\n", rf.me, _type, server, rf.state, Follower.String())
@@ -550,6 +575,7 @@ func (rf *Raft) sendAndHandleAppendEntries(index int, server int, appended chan 
 			}
 		} else {
 			fmt.Printf("server-%d:: %s Append Entries: AppendEntries RPC response for term %d from server %d timed out! It is probably dead.\n", rf.me, _type, args.Term, server)
+			time.Sleep(time.Duration(500) * time.Millisecond)
 			if heartbeat {
 				return
 			}
