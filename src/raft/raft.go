@@ -133,23 +133,6 @@ func (rf *Raft) GetStateAndLogLength() (int, bool, int) {
 	return term, isleader, len(rf.log)
 }
 
-func (rf *Raft) GetStateAndNextIndex(server int) (int, bool, int) {
-	// fmt.Printf("server-%d:: GetState: Acquired lock.\n", rf.me)
-	rf.mu.Lock()
-	defer rf.mu.Unlock()
-	var term int
-	var isleader bool
-	term = rf.currentTerm
-	if rf.state == Leader {
-		isleader = true
-	} else {
-		isleader = false
-	}
-	// fmt.Printf("server-%d:: GetStat: Relinquished lock.\n", rf.me)
-
-	return term, isleader, rf.nextIndex[server]
-}
-
 // example RequestVote RPC arguments structure.
 // field names must start with capital letters!
 type RequestVoteArgs struct {
@@ -212,12 +195,10 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 			fmt.Printf("server-%d:: AppendEntries: More up-to-date server %d detected! Transitioning from %s -> %s.!\n", rf.me, args.LeaderID, rf.state, Follower.String())
 			rf.state = Follower
 		}
-		// We need to reset the Election Timer here in case the log entries are null,
-		// since we have received a heartbeat message from the current leader. This is
+		// We need to reset the Election Timer here since we have received an
+		// AppendEntries RPC message from the current leader. This is
 		// done by sending a messsage to the rf.appendEntriesChannel, which is consumed by
-		// the election timeout goroutine to reset the timer. For now, let's assume
-		// that we need to reset this election timer regardless of the type of
-		// AppendEntries RPC is received (heartbeat/replication).
+		// the election timeout goroutine to reset the timer.
 
 		rf.appendEntriesChannel <- reply
 	} else {
@@ -260,9 +241,6 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	if args.CommitIndex > rf.commitIndex {
 		lastIndex := len(rf.log) - 1
 		rf.commitIndex = int(math.Min(float64(args.CommitIndex), float64(lastIndex)))
-		// if rf.lastApplied+1 <= rf.commitIndex {
-		// 	fmt.Printf("server-%d:: AppendEntries handler (from %d): Applying commands from lastApplied (%d) to commitIndex (%d)!\n", rf.me, args.LeaderID, rf.lastApplied+1, rf.commitIndex)
-		// }
 		for logIdx := rf.lastApplied + 1; logIdx <= rf.commitIndex; logIdx++ {
 			// fmt.Printf("server-%d:: performLogReplication: Applying command at index (%d)!\n", rf.me, logIdx)
 			rf.applyCh <- ApplyMsg{CommandValid: true, CommandIndex: logIdx + 1, Command: rf.log[logIdx].Command}
@@ -313,10 +291,6 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	} else {
 		fmt.Printf("server-%d:: Vote NOT granted to %d for term %d! %s\n", rf.me, args.CandidateIndex, args.Term, voteNotGrantedReason)
 	}
-
-	// fmt.Printf("server-%d:: Reply to %d: VoteGranted: %t\n", rf.me, args.CandidateIndex, reply.VoteGranted)
-
-	// fmt.Printf("server-%d:: RequestVote: Relinquished Lock!\n", rf.me)
 
 }
 
@@ -491,16 +465,6 @@ func (rf *Raft) constructPayload(targetIndex int, server int, decrementNextIndex
 	args.PrevLogIndex = prevLogIndex
 	args.PrevLogTerm = prevLogTerm
 
-	// We require this check because another parallel AppendEntries RPC for a
-	//  targetIndex' > targetIndex might have already replicated all the logs up till
-	// the targetIndex'. In that case, rf.nextIndex[server] would already
-	// be > targetIndex. [A1, B1, C1]
-
-	// if rf.nextIndex[server] <= targetIndex {
-	// 	args.LogEntries = rf.log[rf.nextIndex[server] : targetIndex+1]
-	// } else {
-	// 	args.LogEntries = make([]LogEntry, 0)
-	// }
 	if rf.nextIndex[server] <= len(rf.log) {
 		args.LogEntries = rf.log[rf.nextIndex[server]:len(rf.log)]
 	} else {
@@ -531,7 +495,7 @@ func (rf *Raft) sendAndHandleAppendEntries(index int, server int, appended chan 
 		_type = "HEARTBEAT"
 	}
 	for {
-		_, isLeader, _ := rf.GetStateAndNextIndex(server)
+		_, isLeader := rf.GetState()
 		if !isLeader {
 			if !heartbeat {
 				stepDown <- true
@@ -572,9 +536,6 @@ func (rf *Raft) sendAndHandleAppendEntries(index int, server int, appended chan 
 					if numNodes >= quorum && rf.log[potentialCommitIndex].Term == rf.currentTerm {
 						rf.commitIndex = potentialCommitIndex
 						// fmt.Printf("server-%d:: %s Append Entries response from %d : Setting commitIndex to: %d\n", rf.me, _type, server, rf.commitIndex)
-						// if rf.lastApplied+1 <= rf.commitIndex {
-						// 	fmt.Printf("server-%d:: performLogReplication: Applying commands from lastApplied (%d) to commitIndex (%d)!\n", rf.me, rf.lastApplied+1, rf.commitIndex)
-						// }
 						for logIdx := rf.lastApplied + 1; logIdx <= rf.commitIndex; logIdx++ {
 							// fmt.Printf("server-%d:: %s Append Entries response from %d: Applying command at index (%d)!\n", rf.me, _type, server, logIdx)
 							rf.applyCh <- ApplyMsg{CommandValid: true, CommandIndex: logIdx + 1, Command: rf.log[logIdx].Command}
@@ -598,26 +559,6 @@ func (rf *Raft) sendAndHandleAppendEntries(index int, server int, appended chan 
 				return
 			}
 		}
-	}
-}
-
-func (rf *Raft) sendAndHandleAppendEntriesHeartbeat(term int, leaderId int, server int, commitIndex int) {
-	args := &AppendEntriesArgs{Term: term, LeaderID: leaderId, CommitIndex: commitIndex}
-	reply := &AppendEntriesReply{}
-	// fmt.Printf("server-%d:: sendAndHandleAppendEntries: Sending AppendEntries RPC to %d!\n", rf.me, server)
-	ret := rf.sendAppendEntries(server, args, reply)
-	if ret {
-		rf.mu.Lock()
-		// fmt.Printf("server-%d:: sendAndHandleAppendEntries: Acquired Lock to send to %d!\n", rf.me, server)
-		if reply.Term > rf.currentTerm {
-			fmt.Printf("server-%d:: sendAndHandleAppendEntries: More up-to-date leader %d detected! Transitioning from %s -> %s.!\n", rf.me, server, rf.state, Follower.String())
-			rf.currentTerm = reply.Term
-			rf.state = Follower
-		}
-		rf.mu.Unlock()
-		// fmt.Printf("server-%d:: sendAndHandleAppendEntries: Relinquished Lock to send to %d!\n", rf.me, server)
-	} else {
-		// fmt.Printf("server-%d:: sendAndHandleAppendEntries: AppendEntries RPC response for term %d from server %d timed out! It is probably dead.\n", rf.me, args.Term, server)
 	}
 }
 
@@ -717,23 +658,6 @@ func (rf *Raft) performLeaderElection(peers []*labrpc.ClientEnd, myIndex int, te
 	}
 }
 
-func (rf *Raft) sendHeartbeatIfLeaderDeprecated(heartbeatTimeout int) {
-	for !rf.killed() {
-		// fmt.Printf("server-%d:: trying to get state\n", rf.me)
-		term, isLeader := rf.GetState()
-		// fmt.Printf("server-%d:: term: %d and isLeader: %t.\n", rf.me, term, isLeader)
-		if isLeader {
-			// fmt.Printf("server-%d:: Sending  assert authority as leader.\n", rf.me)
-			for index := range rf.peers {
-				if index != rf.me {
-					go rf.sendAndHandleAppendEntriesHeartbeat(term, rf.me, index, rf.commitIndex)
-				}
-			}
-		}
-		time.Sleep(time.Duration(heartbeatTimeout) * time.Millisecond)
-	}
-}
-
 func (rf *Raft) electionTimeoutRoutine(electionTimeout int) {
 	for !rf.killed() {
 		// leader = false
@@ -742,9 +666,6 @@ func (rf *Raft) electionTimeoutRoutine(electionTimeout int) {
 		select {
 		case <-rf.appendEntriesChannel:
 			// fmt.Printf("server-%d:: electionTimeoutRoutine: Received AppendEntries RPC from current leader. Resetting election timeout.\n", rf.me)
-			// Breaking out of the select statement causes the timeout to be
-			// get reset which is important when we've received a heartbeat
-			// from the current leader.
 		case <-rf.requestVotesChannel:
 			// fmt.Printf("server-%d:: electionTimeoutRoutine: Replied to Request Vote RPC. Resetting election timeout.\n", rf.me)
 		case <-time.After(time.Duration(electionTimeout)*time.Millisecond + time.Duration(rand.Intn(20))*time.Millisecond):
@@ -754,16 +675,9 @@ func (rf *Raft) electionTimeoutRoutine(electionTimeout int) {
 				break
 			}
 
-			// if !rf.killed() {
-			// 	fmt.Printf("server-%d:: electionTimeoutRoutine: Just had election timeout.\n", rf.me)
-			// }
-
 			rf.mu.Lock()
 			// fmt.Printf("server-%d:: electionTimeoutRoutine (timeout): Acquired lock.\n", rf.me)
 			rf.currentTerm += 1
-			// if !rf.killed() {
-			// 	fmt.Printf("server-%d:: electionTimeoutRoutine: Hit election timeout %d! Initiating election for term %d.\n", rf.me, electionTimeout, rf.currentTerm)
-			// }
 			rf.state = Candidate
 			curServerLastLogIndex := len(rf.log) - 1
 			curServerLastLogTerm := 0
