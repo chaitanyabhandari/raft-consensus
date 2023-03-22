@@ -18,7 +18,6 @@ package raft
 //
 
 import (
-	"encoding/json"
 	"fmt"
 	"math"
 	"math/rand"
@@ -85,8 +84,8 @@ type Raft struct {
 	commitIndex          int
 	lastApplied          int
 	nextIndex            []int
+	matchIndex           []int
 	log                  []LogEntry
-	electionTimeout      int
 	appendEntriesChannel chan *AppendEntriesReply
 	requestVotesChannel  chan *RequestVoteReply
 	state                State
@@ -195,8 +194,9 @@ func (rf *Raft) prefixMatches(leaderLastLogTerm int, leaderLastLogIndex int) boo
 			prefixMatch = false
 		}
 	}
-	fmt.Printf("server-%d:: AppendEntries: leaderLastLogTerm: %d, leaderLastLogIndex: %d, prefixMatch: %t, log on server: ", rf.me, leaderLastLogTerm, leaderLastLogIndex, prefixMatch)
-	fmt.Println(rf.log)
+	if !prefixMatch {
+		fmt.Printf("server-%d:: AppendEntries: leaderLastLogTerm: %d, leaderLastLogIndex: %d, prefixMatch: %t, log on server: %v\n", rf.me, leaderLastLogTerm, leaderLastLogIndex, prefixMatch, rf.log)
+	}
 
 	return prefixMatch
 }
@@ -235,27 +235,36 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 		return
 	} else {
 		if len(args.LogEntries) > 0 {
-			fmt.Printf("server-%d:: Received AppendEntries RPC from %d: PrevLogIndex - %d, PrevLogTerm - %d, Commit Index - %d, LogEntries: %v\n", rf.me, args.LeaderID, args.PrevLogIndex, args.PrevLogTerm, args.CommitIndex, args.LogEntries)
-			targetIndex := args.PrevLogIndex + 1
-			if len(rf.log) > targetIndex {
-				rf.log = rf.log[:targetIndex]
-				fmt.Printf("server-%d:: Log after truncate: ", rf.me)
-				fmt.Println(rf.log)
+			// fmt.Printf("server-%d:: Received AppendEntries RPC from %d: PrevLogIndex - %d, PrevLogTerm - %d, Commit Index - %d, LogEntries: %v\n", rf.me, args.LeaderID, args.PrevLogIndex, args.PrevLogTerm, args.CommitIndex, args.LogEntries)
+			appendStartIndex := args.PrevLogIndex + 1
+			// Only truncate future logs if there's a conflict at the appendStartIndex.
+			if appendStartIndex < len(rf.log) && rf.log[appendStartIndex].Term != args.LogEntries[0].Term {
+				rf.log = rf.log[:appendStartIndex]
+				// fmt.Printf("server-%d:: Log after truncate: %v\nc", rf.me, rf.log)
 			}
-
-			rf.log = append(rf.log, args.LogEntries...)
-			fmt.Printf("server-%d:: Log after append: ", rf.me)
-			fmt.Println(rf.log)
+			index := 0
+			for index < len(args.LogEntries) && appendStartIndex < len(rf.log) {
+				// fmt.Printf("server-%d:: Appending %d from args.LogEntries (length %d)  at index %d (length %d)\n", rf.me, index, len(args.LogEntries), appendStartIndex, len(rf.log))
+				rf.log[appendStartIndex] = args.LogEntries[index]
+				appendStartIndex++
+				index++
+			}
+			if index < len(args.LogEntries) {
+				// fmt.Printf("server-%d:: Appending slice from index %d:%d from args.LogEntries to rf.log\n", rf.me, index, len(args.LogEntries))
+				rf.log = append(rf.log, args.LogEntries[index:]...)
+			}
+			// fmt.Printf("server-%d:: Log after append: %v\n", rf.me, rf.log)
 		}
 		reply.Appended = true
 	}
 	if args.CommitIndex > rf.commitIndex {
 		lastIndex := len(rf.log) - 1
 		rf.commitIndex = int(math.Min(float64(args.CommitIndex), float64(lastIndex)))
-		if rf.lastApplied+1 <= rf.commitIndex {
-			fmt.Printf("server-%d:: AppendEntries handler (from %d): Applying commands from lastApplied (%d) to commitIndex (%d)!\n", rf.me, args.LeaderID, rf.lastApplied+1, rf.commitIndex)
-		}
+		// if rf.lastApplied+1 <= rf.commitIndex {
+		// 	fmt.Printf("server-%d:: AppendEntries handler (from %d): Applying commands from lastApplied (%d) to commitIndex (%d)!\n", rf.me, args.LeaderID, rf.lastApplied+1, rf.commitIndex)
+		// }
 		for logIdx := rf.lastApplied + 1; logIdx <= rf.commitIndex; logIdx++ {
+			// fmt.Printf("server-%d:: performLogReplication: Applying command at index (%d)!\n", rf.me, logIdx)
 			rf.applyCh <- ApplyMsg{CommandValid: true, CommandIndex: logIdx + 1, Command: rf.log[logIdx].Command}
 		}
 		rf.lastApplied = rf.commitIndex
@@ -387,20 +396,6 @@ func (rf *Raft) performLogReplication(peers []*labrpc.ClientEnd, command interfa
 			// fmt.Printf("server-%d:: Received positive AppendEntries RPC response for term %d! Total positive responses: %d\n", rf.me, term, totalAppended)
 			if totalAppended >= quorum {
 				fmt.Printf("server-%d:: Successfully replicated command at index %d a majority of servers!\n", rf.me, index)
-				rf.mu.Lock()
-				// This leader will only commmit entries if it has replicated at least one command in this term
-				// on a majority of servers.
-				if rf.currentTerm == term {
-					rf.commitIndex = index
-					if rf.lastApplied+1 <= rf.commitIndex {
-						fmt.Printf("server-%d:: performLogReplication: Applying commands from lastApplied (%d) to commitIndex (%d)!\n", rf.me, rf.lastApplied+1, rf.commitIndex)
-					}
-					for logIdx := rf.lastApplied + 1; logIdx <= rf.commitIndex; logIdx++ {
-						rf.applyCh <- ApplyMsg{CommandValid: true, CommandIndex: logIdx + 1, Command: rf.log[logIdx].Command}
-					}
-					rf.lastApplied = index
-				}
-				rf.mu.Unlock()
 				return
 			}
 		case <-stepDown:
@@ -439,6 +434,8 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 		fmt.Printf("server-%d:: Start - term: %d, isLeader: %t, index: %d,command:", rf.me, term, isLeader, index)
 		fmt.Println(command)
 		rf.log = append(rf.log, LogEntry{Command: command, Term: term})
+		fmt.Printf("server-%d:: Leader logs after append: %v\n", rf.me, rf.log)
+		rf.matchIndex[rf.me] = rf.nextIndex[rf.me]
 		rf.nextIndex[rf.me]++
 		go rf.performLogReplication(rf.peers, command, term, index, rf.me)
 	}
@@ -499,17 +496,20 @@ func (rf *Raft) constructPayload(targetIndex int, server int, decrementNextIndex
 	// the targetIndex'. In that case, rf.nextIndex[server] would already
 	// be > targetIndex. [A1, B1, C1]
 
-	if rf.nextIndex[server] <= targetIndex {
-		args.LogEntries = rf.log[rf.nextIndex[server] : targetIndex+1]
+	// if rf.nextIndex[server] <= targetIndex {
+	// 	args.LogEntries = rf.log[rf.nextIndex[server] : targetIndex+1]
+	// } else {
+	// 	args.LogEntries = make([]LogEntry, 0)
+	// }
+	if rf.nextIndex[server] <= len(rf.log) {
+		args.LogEntries = rf.log[rf.nextIndex[server]:len(rf.log)]
 	} else {
 		args.LogEntries = make([]LogEntry, 0)
 	}
-	fmt.Printf("server-%d:: %s Append Entries to %d:  nextIndex - %d, targetIndex - %d\n", rf.me, _type, server, rf.nextIndex[server], targetIndex)
+	// fmt.Printf("server-%d:: %s Append Entries to %d:  nextIndex - %d, targetIndex - %d\n", rf.me, _type, server, rf.nextIndex[server], targetIndex)
 	args.CommitIndex = rf.commitIndex
 	args.LeaderID = rf.me
-	res, _ := json.Marshal(args)
-
-	fmt.Printf("server-%d:: %s Append Entries: Payload to be sent to %d:  %s\n", rf.me, _type, server, string(res))
+	// fmt.Printf("server-%d:: %s Append Entries: Payload to be sent to %d: %+v\n", rf.me, _type, server, args)
 	return args, reply
 }
 
@@ -531,20 +531,12 @@ func (rf *Raft) sendAndHandleAppendEntries(index int, server int, appended chan 
 		_type = "HEARTBEAT"
 	}
 	for {
-		_, isLeader, nextIndex := rf.GetStateAndNextIndex(server)
+		_, isLeader, _ := rf.GetStateAndNextIndex(server)
 		if !isLeader {
 			if !heartbeat {
 				stepDown <- true
 			}
 			return
-		}
-		if !heartbeat {
-			// I can't replicate the entry at index
-			if nextIndex < index {
-				fmt.Printf("server-%d:: %s Append Entries to %d: I can't replicate the entry at index %d, nextIndex is %d!\n", rf.me, _type, server, index, rf.nextIndex[server])
-				time.Sleep(time.Duration(500) * time.Millisecond)
-				continue
-			}
 		}
 		args, reply := rf.constructPayload(index, server, decrementNextIndex, _type)
 		ret := rf.sendAppendEntries(server, args, reply)
@@ -560,9 +552,35 @@ func (rf *Raft) sendAndHandleAppendEntries(index int, server int, appended chan 
 			if reply.Appended {
 				if len(args.LogEntries) > 0 {
 					rf.mu.Lock()
+					totalNodes := len(rf.peers)
+					quorum := int(math.Ceil(float64(totalNodes) / 2))
 					// fmt.Printf("server-%d:: %s Append Entries response from %d : Log entries appended: ", rf.me, _type, server)
 					// fmt.Println(args.LogEntries)
-					rf.nextIndex[server] = index + 1
+					appendEndIndex := args.PrevLogIndex + len(args.LogEntries)
+					rf.nextIndex[server] = appendEndIndex + 1
+					rf.matchIndex[server] = appendEndIndex
+					// fmt.Printf("server-%d:: %s Append Entries response from %d : Log entries appended: %v, matchIndex: %d, nextIndex: %d\n", rf.me, _type, server, args.LogEntries, rf.nextIndex[server], rf.nextIndex[server]+1)
+
+					numNodes := 0
+					potentialCommitIndex := math.MaxInt32
+					for index := range rf.matchIndex {
+						if rf.matchIndex[index] > rf.commitIndex {
+							potentialCommitIndex = int(math.Min(float64(rf.matchIndex[index]), float64(potentialCommitIndex)))
+							numNodes++
+						}
+					}
+					if numNodes >= quorum && rf.log[potentialCommitIndex].Term == rf.currentTerm {
+						rf.commitIndex = potentialCommitIndex
+						// fmt.Printf("server-%d:: %s Append Entries response from %d : Setting commitIndex to: %d\n", rf.me, _type, server, rf.commitIndex)
+						// if rf.lastApplied+1 <= rf.commitIndex {
+						// 	fmt.Printf("server-%d:: performLogReplication: Applying commands from lastApplied (%d) to commitIndex (%d)!\n", rf.me, rf.lastApplied+1, rf.commitIndex)
+						// }
+						for logIdx := rf.lastApplied + 1; logIdx <= rf.commitIndex; logIdx++ {
+							// fmt.Printf("server-%d:: %s Append Entries response from %d: Applying command at index (%d)!\n", rf.me, _type, server, logIdx)
+							rf.applyCh <- ApplyMsg{CommandValid: true, CommandIndex: logIdx + 1, Command: rf.log[logIdx].Command}
+						}
+						rf.lastApplied = rf.commitIndex
+					}
 					rf.mu.Unlock()
 				}
 				if !heartbeat {
@@ -571,7 +589,7 @@ func (rf *Raft) sendAndHandleAppendEntries(index int, server int, appended chan 
 				return
 			} else {
 				decrementNextIndex = true
-				fmt.Printf("server-%d:: %s Append Entries response from %d: Log prefix matchfailed! Reconstructing payload and resending AppendEntries RPC!\n", rf.me, _type, server)
+				fmt.Printf("server-%d:: %s Append Entries response from %d: Log prefix match failed! Reconstructing payload and resending AppendEntries RPC!\n", rf.me, _type, server)
 			}
 		} else {
 			fmt.Printf("server-%d:: %s Append Entries: AppendEntries RPC response for term %d from server %d timed out! It is probably dead.\n", rf.me, _type, args.Term, server)
@@ -784,6 +802,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.commitIndex = -1
 	rf.lastApplied = -1
 	rf.nextIndex = make([]int, len(peers))
+	rf.matchIndex = make([]int, len(peers))
 	rf.votedFor = make(map[int]int)
 	rf.appendEntriesChannel = make(chan *AppendEntriesReply)
 	rf.requestVotesChannel = make(chan *RequestVoteReply)
