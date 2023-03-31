@@ -216,12 +216,12 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 		return
 	} else {
 		if len(args.LogEntries) > 0 {
-			// fmt.Printf("server-%d:: Received AppendEntries RPC from %d: PrevLogIndex - %d, PrevLogTerm - %d, Commit Index - %d, LogEntries: %v\n", rf.me, args.LeaderID, args.PrevLogIndex, args.PrevLogTerm, args.CommitIndex, args.LogEntries)
+			fmt.Printf("server-%d:: Received AppendEntries RPC from %d: PrevLogIndex - %d, PrevLogTerm - %d, Commit Index - %d, LogEntries: %v\n", rf.me, args.LeaderID, args.PrevLogIndex, args.PrevLogTerm, args.CommitIndex, args.LogEntries)
 			appendStartIndex := args.PrevLogIndex + 1
 			// Only truncate future logs if there's a conflict at the appendStartIndex.
 			if appendStartIndex < len(rf.log) && rf.log[appendStartIndex].Term != args.LogEntries[0].Term {
 				rf.log = rf.log[:appendStartIndex]
-				// fmt.Printf("server-%d:: Log after truncate: %v\nc", rf.me, rf.log)
+				fmt.Printf("server-%d:: Log after truncate: %v\nc", rf.me, rf.log)
 			}
 			index := 0
 			for index < len(args.LogEntries) && appendStartIndex < len(rf.log) {
@@ -234,7 +234,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 				// fmt.Printf("server-%d:: Appending slice from index %d:%d from args.LogEntries to rf.log\n", rf.me, index, len(args.LogEntries))
 				rf.log = append(rf.log, args.LogEntries[index:]...)
 			}
-			// fmt.Printf("server-%d:: Log after append: %v\n", rf.me, rf.log)
+			fmt.Printf("server-%d:: Log after append: %v\n", rf.me, rf.log)
 		}
 		reply.Appended = true
 	}
