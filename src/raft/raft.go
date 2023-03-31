@@ -447,12 +447,12 @@ func (rf *Raft) stepDownIfOutdated(term int) bool {
 	return false
 }
 
-func (rf *Raft) constructPayload(targetIndex int, server int, decrementNextIndex bool, _type string) (*AppendEntriesArgs, *AppendEntriesReply) {
+func (rf *Raft) constructPayload(term int, targetIndex int, server int, decrementNextIndex bool, _type string) (*AppendEntriesArgs, *AppendEntriesReply) {
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
 	// fmt.Printf("server-%d:: %s Append Entries: Constructing Payload to be sent to %d: targetIndex - %d\n ", rf.me, _type, server, targetIndex)
 
-	args := &AppendEntriesArgs{Term: rf.currentTerm, LeaderID: rf.me}
+	args := &AppendEntriesArgs{Term: term, LeaderID: rf.me}
 	reply := &AppendEntriesReply{}
 	if decrementNextIndex {
 		rf.nextIndex[server]--
@@ -495,14 +495,14 @@ func (rf *Raft) sendAndHandleAppendEntries(index int, server int, appended chan 
 		_type = "HEARTBEAT"
 	}
 	for {
-		_, isLeader := rf.GetState()
+		term, isLeader := rf.GetState()
 		if !isLeader {
 			if !heartbeat {
 				stepDown <- true
 			}
 			return
 		}
-		args, reply := rf.constructPayload(index, server, decrementNextIndex, _type)
+		args, reply := rf.constructPayload(term, index, server, decrementNextIndex, _type)
 		ret := rf.sendAppendEntries(server, args, reply)
 
 		if ret {
