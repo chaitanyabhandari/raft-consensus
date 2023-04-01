@@ -9,13 +9,15 @@ do
 	for (( j=1; j<=$testsPerIteration; j++ ))
         do
                 go test -race > all_${i}_${j}.log;
-                res=$(cat all_${i}_${j}.log | grep "Passed")
-		if [ ! -z "${res}" ]
+                res=$(cat all_${i}_${j}.log | grep "FAIL")  # check if "FAIL" is present
+		if [ ! -z "${res}" ] # if "FAIL is there"
                 then
+                        echo "all_${i}_${j}.log failed! Retaining log."
+                
+                else
                         echo "all_${i}_${j}.log passed!"
                         rm -rf all_${i}_${j}.log
-                else
-                echo "all_${i}_${j}.log failed! Retaining log."
+                
 fi
         done;
 done
