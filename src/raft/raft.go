@@ -189,22 +189,31 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	defer rf.mu.Unlock()
 	// fmt.Printf("server-%d:: AppendEntries from %d of term %d, my term: %d!\n", rf.me, args.LeaderID, args.Term, rf.currentTerm)
 
+	// If args.Term == rf.currentTerm:
+	// - If you're a leader, you should step down. This is something that shouldn't
+	// happen because this means that there are two leaders for a single term. But
+	// maybe we don't need to worry about it.
+	// - If you're a candidate, you SHOULD step down because it means you've
+	// discovered the leader of the current term.
+	// If args.Term > rf.currentTerm:
+	// - If you're a leader, you SHOULD step down since you've been
+	//  now detected a server (rather, leader) with a higher term. This is important to
+	// neutralize old leaders.
+	// - If you're a candidate, you SHOULD step down since you've detected
+	// a server (rather, leader) with a higher term.
 	if rf.currentTerm <= args.Term {
 		rf.currentTerm = args.Term
 		if rf.state == Candidate || rf.state == Leader {
-			fmt.Printf("server-%d:: AppendEntries: More up-to-date server %d detected! Transitioning from %s -> %s.!\n", rf.me, args.LeaderID, rf.state, Follower.String())
+			fmt.Printf("server-%d:: AppendEntries RPC Handler: Server %d has higher term (%d) than me (%d)! Transitioning from %s -> %s.!\n", rf.me, args.LeaderID, args.Term, rf.currentTerm, rf.state, Follower.String())
 			rf.state = Follower
 		}
-		// We need to reset the Election Timer here since we have received an
-		// AppendEntries RPC message from the current leader. This is
-		// done by sending a messsage to the rf.appendEntriesChannel, which is consumed by
-		// the election timeout goroutine to reset the timer.
-
+		// rf.appendEntriesChannel is consumed by the election timeout goroutine
+		// to reset the timer.
 		rf.appendEntriesChannel <- reply
 	} else {
-		// RPC is received from a less up-to-date server. In this case, we should
+		// RPC is received from a server with an older term. In this case, we should
 		// reject this RPC and send our current term so that the sender can
-		// update their curren term.
+		// update their current term.
 		reply.Term = rf.currentTerm
 		reply.Appended = false
 		return
@@ -263,8 +272,23 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 		reply.VoteGranted = false
 		rf.mu.Unlock()
 	} else {
+		// If args.Term == rf.currentTerm:
+		// - If you're a leader, you shouldn't step down since you've been
+		//  elected as the leader for that term.
+		// - If you're a candidate, you don't need
+		// to step down since multiple candidates can exist for a single term.
+		// If args.Term > rf.currentTerm:
+		// - If you're a leader, you SHOULD step down since you've been
+		//  now detected a server with a higher term. This is important to
+		// neutralize old leaders.
+		// - If you're a candidate, you SHOULD step down since you've detected
+		// a server with a higher term.
 		reply.Term = args.Term
 		rf.currentTerm = args.Term
+		if rf.state == Leader || rf.state == Candidate {
+			fmt.Printf("server-%d:: RequestVote RPC Handler: Server %d has higher term (%d) than me (%d)! Transitioning from %s -> %s.!\n", rf.me, args.CandidateIndex, args.Term, rf.currentTerm, rf.state, Follower.String())
+			rf.state = Follower
+		}
 		val, ok := rf.votedFor[args.Term]
 		if !ok || val == args.CandidateIndex {
 			if rf.candidateLogMoreUpToDate(args.LastLogTerm, args.LastLogIndex) {
@@ -439,6 +463,16 @@ func (rf *Raft) killed() bool {
 func (rf *Raft) stepDownIfOutdated(term int) bool {
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
+	// One thing that we need to think about is this: Is it safe for us
+	// to just compare args.Term & reply.Term here and step down if
+	// args.Term is smaller?
+	// What we're currently doing is, we're comparing
+	// reply.Term with rf.currentTerm and only stepping down IF WE ARE STILL
+	// ON AN OLDER TERM. To me, this makes sense since our currentTerm is already
+	// more up-to-date than the RPC reply we, don't need to do anything since
+	// we have updated our term elsewhere (possibly in the RequestVote & AppendEntries handler),
+	// and have already transitioned to the Follower state. Question is, is it okay to
+	// assume that?
 	if term > rf.currentTerm {
 		rf.currentTerm = term
 		rf.state = Follower
