@@ -18,7 +18,6 @@ package raft
 //
 
 import (
-	"fmt"
 	"math"
 	"math/rand"
 	"raft/labrpc"
@@ -155,7 +154,7 @@ func (rf *Raft) candidateLogMoreUpToDate(candidateLastLogTerm int, candidateLast
 	if curServerLastLogIndex >= 0 {
 		curServerLastLogTerm = rf.log[curServerLastLogIndex].Term
 	}
-	fmt.Printf("server-%d:: RequestVote: candidateLastLogTerm: %d, candidateLastLogIndex: %d, curServerLastLogTerm: %d, curServerLastLogIndex: %d\n", rf.me, candidateLastLogTerm, candidateLastLogIndex, curServerLastLogTerm, curServerLastLogIndex)
+	// fmt.Printf("server-%d:: RequestVote: candidateLastLogTerm: %d, candidateLastLogIndex: %d, curServerLastLogTerm: %d, curServerLastLogIndex: %d\n", rf.me, candidateLastLogTerm, candidateLastLogIndex, curServerLastLogTerm, curServerLastLogIndex)
 	if candidateLastLogTerm > curServerLastLogTerm {
 		return true
 	} else if candidateLastLogTerm == curServerLastLogTerm {
@@ -177,9 +176,9 @@ func (rf *Raft) prefixMatches(leaderLastLogTerm int, leaderLastLogIndex int) boo
 			prefixMatch = false
 		}
 	}
-	if !prefixMatch {
-		fmt.Printf("server-%d:: AppendEntries: leaderLastLogTerm: %d, leaderLastLogIndex: %d, prefixMatch: %t, log on server: %v\n", rf.me, leaderLastLogTerm, leaderLastLogIndex, prefixMatch, rf.log)
-	}
+	// if !prefixMatch {
+	// 	fmt.Printf("server-%d:: AppendEntries: leaderLastLogTerm: %d, leaderLastLogIndex: %d, prefixMatch: %t, log on server: %v\n", rf.me, leaderLastLogTerm, leaderLastLogIndex, prefixMatch, rf.log)
+	// }
 
 	return prefixMatch
 }
@@ -204,7 +203,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	if rf.currentTerm <= args.Term {
 		rf.currentTerm = args.Term
 		if rf.state == Candidate || rf.state == Leader {
-			fmt.Printf("server-%d:: AppendEntries RPC Handler: Server %d has higher term (%d) than me (%d)! Transitioning from %s -> %s.!\n", rf.me, args.LeaderID, args.Term, rf.currentTerm, rf.state, Follower.String())
+			// fmt.Printf("server-%d:: AppendEntries RPC Handler: Server %d has higher term (%d) than me (%d)! Transitioning from %s -> %s.!\n", rf.me, args.LeaderID, args.Term, rf.currentTerm, rf.state, Follower.String())
 			rf.state = Follower
 		}
 		// rf.appendEntriesChannel is consumed by the election timeout goroutine
@@ -225,12 +224,12 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 		return
 	} else {
 		if len(args.LogEntries) > 0 {
-			fmt.Printf("server-%d:: Received AppendEntries RPC from %d: PrevLogIndex - %d, PrevLogTerm - %d, Commit Index - %d, LogEntries: %v\n", rf.me, args.LeaderID, args.PrevLogIndex, args.PrevLogTerm, args.CommitIndex, args.LogEntries)
+			// fmt.Printf("server-%d:: Received AppendEntries RPC from %d: PrevLogIndex - %d, PrevLogTerm - %d, Commit Index - %d, LogEntries: %v\n", rf.me, args.LeaderID, args.PrevLogIndex, args.PrevLogTerm, args.CommitIndex, args.LogEntries)
 			appendStartIndex := args.PrevLogIndex + 1
 			// Only truncate future logs if there's a conflict at the appendStartIndex.
 			if appendStartIndex < len(rf.log) && rf.log[appendStartIndex].Term != args.LogEntries[0].Term {
 				rf.log = rf.log[:appendStartIndex]
-				fmt.Printf("server-%d:: Log after truncate: %v\nc", rf.me, rf.log)
+				// fmt.Printf("server-%d:: Log after truncate: %v\nc", rf.me, rf.log)
 			}
 			index := 0
 			for index < len(args.LogEntries) && appendStartIndex < len(rf.log) {
@@ -243,7 +242,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 				// fmt.Printf("server-%d:: Appending slice from index %d:%d from args.LogEntries to rf.log\n", rf.me, index, len(args.LogEntries))
 				rf.log = append(rf.log, args.LogEntries[index:]...)
 			}
-			fmt.Printf("server-%d:: Log after append: %v\n", rf.me, rf.log)
+			// fmt.Printf("server-%d:: Log after append: %v\n", rf.me, rf.log)
 		}
 		reply.Appended = true
 	}
@@ -264,10 +263,10 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	// fmt.Printf("server-%d:: RequestVote by %d: Acquired Lock!\n", rf.me, args.CandidateIndex)
 
 	// defer rf.mu.Unlock()
-	voteNotGrantedReason := ""
+	// voteNotGrantedReason := ""
 	if args.Term < rf.currentTerm {
 		// fmt.Printf("Term of candidate server %d (%d) is less than my term (%d). Vote not granted not to %d for term %d!", args.CandidateIndex, args.Term, rf.currentTerm, args.CandidateIndex, args.Term)
-		voteNotGrantedReason = fmt.Sprintf("Term of candidate server %d (%d) is less than my term (%d). Vote not granted not to %d for term %d!", args.CandidateIndex, args.Term, rf.currentTerm, args.CandidateIndex, args.Term)
+		// voteNotGrantedReason = fmt.Sprintf("Term of candidate server %d (%d) is less than my term (%d). Vote not granted not to %d for term %d!", args.CandidateIndex, args.Term, rf.currentTerm, args.CandidateIndex, args.Term)
 		reply.Term = rf.currentTerm
 		reply.VoteGranted = false
 		rf.mu.Unlock()
@@ -286,7 +285,7 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 		reply.Term = args.Term
 		rf.currentTerm = args.Term
 		if rf.state == Leader || rf.state == Candidate {
-			fmt.Printf("server-%d:: RequestVote RPC Handler: Server %d has higher term (%d) than me (%d)! Transitioning from %s -> %s.!\n", rf.me, args.CandidateIndex, args.Term, rf.currentTerm, rf.state, Follower.String())
+			// fmt.Printf("server-%d:: RequestVote RPC Handler: Server %d has higher term (%d) than me (%d)! Transitioning from %s -> %s.!\n", rf.me, args.CandidateIndex, args.Term, rf.currentTerm, rf.state, Follower.String())
 			rf.state = Follower
 		}
 		val, ok := rf.votedFor[args.Term]
@@ -299,22 +298,22 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 				rf.requestVotesChannel <- reply
 				// fmt.Printf("AFTER: server-%d:: Reply to %d: VoteGranted: %t\n", rf.me, args.CandidateIndex, reply.VoteGranted)
 			} else {
-				voteNotGrantedReason = fmt.Sprintf("My logs are more up-to-date than candidate %d!", args.CandidateIndex)
+				// voteNotGrantedReason = fmt.Sprintf("My logs are more up-to-date than candidate %d!", args.CandidateIndex)
 				reply.VoteGranted = false
 				rf.mu.Unlock()
 			}
 		} else {
-			fmt.Printf("I have already voted for %d in term %d!", rf.votedFor[rf.currentTerm], rf.currentTerm)
-			voteNotGrantedReason = fmt.Sprintf("I have already voted for %d in term %d!", rf.votedFor[rf.currentTerm], rf.currentTerm)
+			// fmt.Printf("I have already voted for %d in term %d!", rf.votedFor[rf.currentTerm], rf.currentTerm)
+			// voteNotGrantedReason = fmt.Sprintf("I have already voted for %d in term %d!", rf.votedFor[rf.currentTerm], rf.currentTerm)
 			reply.VoteGranted = false
 			rf.mu.Unlock()
 		}
 	}
-	if reply.VoteGranted {
-		fmt.Printf("server-%d:: Vote granted to %d for term %d!\n", rf.me, args.CandidateIndex, args.Term)
-	} else {
-		fmt.Printf("server-%d:: Vote NOT granted to %d for term %d! %s\n", rf.me, args.CandidateIndex, args.Term, voteNotGrantedReason)
-	}
+	// if reply.VoteGranted {
+	// 	fmt.Printf("server-%d:: Vote granted to %d for term %d!\n", rf.me, args.CandidateIndex, args.Term)
+	// } else {
+	// 	fmt.Printf("server-%d:: Vote NOT granted to %d for term %d! %s\n", rf.me, args.CandidateIndex, args.Term, voteNotGrantedReason)
+	// }
 
 }
 
@@ -393,11 +392,11 @@ func (rf *Raft) performLogReplication(peers []*labrpc.ClientEnd, command interfa
 			totalAppended++
 			// fmt.Printf("server-%d:: Received positive AppendEntries RPC response for term %d! Total positive responses: %d\n", rf.me, term, totalAppended)
 			if totalAppended >= quorum {
-				fmt.Printf("server-%d:: Successfully replicated command at index %d a majority of servers!\n", rf.me, index)
+				// fmt.Printf("server-%d:: Successfully replicated command at index %d a majority of servers!\n", rf.me, index)
 				return
 			}
 		case <-stepDown:
-			fmt.Printf("server-%d:: I am no longer leader!\n", rf.me)
+			// fmt.Printf("server-%d:: I am no longer leader!\n", rf.me)
 			return
 		}
 	}
@@ -429,10 +428,10 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 
 	if isLeader {
 		// Leader appends the command to it's log and starts agreement
-		fmt.Printf("server-%d:: Start - term: %d, isLeader: %t, index: %d,command:", rf.me, term, isLeader, index)
-		fmt.Println(command)
+		// fmt.Printf("server-%d:: Start - term: %d, isLeader: %t, index: %d,command:", rf.me, term, isLeader, index)
+		// fmt.Println(command)
 		rf.log = append(rf.log, LogEntry{Command: command, Term: term})
-		fmt.Printf("server-%d:: Leader logs after append: %v\n", rf.me, rf.log)
+		// fmt.Printf("server-%d:: Leader logs after append: %v\n", rf.me, rf.log)
 		rf.matchIndex[rf.me] = rf.nextIndex[rf.me]
 		rf.nextIndex[rf.me]++
 		go rf.performLogReplication(rf.peers, command, term, index, rf.me)
@@ -541,7 +540,7 @@ func (rf *Raft) sendAndHandleAppendEntries(index int, server int, appended chan 
 
 		if ret {
 			if rf.stepDownIfOutdated(reply.Term) {
-				fmt.Printf("server-%d:: %s Append Entries: More up-to-date server %d detected! Transitioning from %s -> %s.!\n", rf.me, _type, server, rf.state, Follower.String())
+				// fmt.Printf("server-%d:: %s Append Entries: More up-to-date server %d detected! Transitioning from %s -> %s.!\n", rf.me, _type, server, rf.state, Follower.String())
 				if !heartbeat {
 					stepDown <- true
 				}
@@ -584,10 +583,10 @@ func (rf *Raft) sendAndHandleAppendEntries(index int, server int, appended chan 
 				return
 			} else {
 				decrementNextIndex = true
-				fmt.Printf("server-%d:: %s Append Entries response from %d: Log prefix match failed! Reconstructing payload and resending AppendEntries RPC!\n", rf.me, _type, server)
+				// fmt.Printf("server-%d:: %s Append Entries response from %d: Log prefix match failed! Reconstructing payload and resending AppendEntries RPC!\n", rf.me, _type, server)
 			}
 		} else {
-			fmt.Printf("server-%d:: %s Append Entries: AppendEntries RPC response for term %d from server %d timed out! It is probably dead.\n", rf.me, _type, args.Term, server)
+			// fmt.Printf("server-%d:: %s Append Entries: AppendEntries RPC response for term %d from server %d timed out! It is probably dead.\n", rf.me, _type, args.Term, server)
 			time.Sleep(time.Duration(500) * time.Millisecond)
 			if heartbeat {
 				return
@@ -600,9 +599,6 @@ func (rf *Raft) sendAndHandleRequestVote(term int, myIndex int, lastLogIndex int
 	args := &RequestVoteArgs{Term: term, CandidateIndex: myIndex, LastLogIndex: lastLogIndex, LastLogTerm: lastLogTerm}
 	reply := &RequestVoteReply{}
 	ret := rf.sendRequestVote(server, args, reply)
-	if !ret {
-		fmt.Printf("server-%d:: RequestVote RPC response from %d for term %d timed out! It is probably dead.\n", rf.me, server, term)
-	}
 	rf.mu.Lock()
 	// fmt.Printf("server-%d:: sendAndHandleRequestVote: Acquired Lock!\n", rf.me)
 
@@ -620,12 +616,12 @@ func (rf *Raft) sendAndHandleRequestVote(term int, myIndex int, lastLogIndex int
 		} else {
 			positiveVotes <- true
 		}
-		fmt.Printf("server-%d:: RequestVote RPC response from %d for term %d. VotedFor: %t\n", rf.me, server, reply.Term, reply.VoteGranted)
+		// fmt.Printf("server-%d:: RequestVote RPC response from %d for term %d. VotedFor: %t\n", rf.me, server, reply.Term, reply.VoteGranted)
 	} else {
 		// We we go into else if the RPC returns false, this only happens when
 		// the network is lossy or the server that we're sending an RPC to is down.
 		// more detailed explanation is in the comments of rf.sendRequestVote().
-		fmt.Printf("server-%d:: RequestVote RPC response from %d for term %d timed out! It is probably dead.\n", rf.me, server, term)
+		// fmt.Printf("server-%d:: RequestVote RPC response from %d for term %d timed out! It is probably dead.\n", rf.me, server, term)
 		negativeVotes <- true
 	}
 	// fmt.Printf("server-%d:: sendAndHandleRequestVote: Relinquished Lock!\n", rf.me)
@@ -633,7 +629,7 @@ func (rf *Raft) sendAndHandleRequestVote(term int, myIndex int, lastLogIndex int
 }
 
 func (rf *Raft) performLeaderElection(peers []*labrpc.ClientEnd, myIndex int, term int, lastLogIndex int, lastLogTerm int, electionTimeout int) bool {
-	fmt.Printf("server-%d:: electionTimeoutRoutine: Hit election timeout %d! Initiating election for term %d.\n", rf.me, electionTimeout, rf.currentTerm)
+	// fmt.Printf("server-%d:: electionTimeoutRoutine: Hit election timeout %d! Initiating election for term %d.\n", rf.me, electionTimeout, rf.currentTerm)
 	totalNodes := len(peers)
 	quorum := int(math.Ceil(float64(totalNodes) / 2))
 
@@ -645,7 +641,7 @@ func (rf *Raft) performLeaderElection(peers []*labrpc.ClientEnd, myIndex int, te
 			rf.mu.Lock()
 			// fmt.Printf("server-%d:: performLeaderElection: Acquired Lock!\n", rf.me)
 			rf.votedFor[term] = myIndex
-			fmt.Printf("server-%d:: Vote granted to %d for term %d!\n", rf.me, rf.me, term)
+			// fmt.Printf("server-%d:: Vote granted to %d for term %d!\n", rf.me, rf.me, term)
 			positiveVotes <- true
 			rf.mu.Unlock()
 			// fmt.Printf("server-%d:: performLeaderElection: Relinquished Lock!\n", rf.me)
@@ -665,7 +661,7 @@ func (rf *Raft) performLeaderElection(peers []*labrpc.ClientEnd, myIndex int, te
 
 			if numPositiveVotes >= quorum {
 				rf.mu.Lock()
-				fmt.Printf("server-%d:: I am the leader for term %d\n", rf.me, rf.currentTerm)
+				// fmt.Printf("server-%d:: I am the leader for term %d\n", rf.me, rf.currentTerm)
 				rf.state = Leader
 				for index := range rf.nextIndex {
 					rf.nextIndex[index] = len(rf.log)
@@ -764,7 +760,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	min := 300
 	max := 500
 	electionTimeout := rand.Intn(max-min+1) + min
-	fmt.Printf("server-%d:: Selected random timeout %d!\n", me, electionTimeout)
+	// fmt.Printf("server-%d:: Selected random timeout %d!\n", me, electionTimeout)
 	heartbeatTimeout := 100
 	go rf.electionTimeoutRoutine(electionTimeout)
 	go rf.sendHeartbeatIfLeader(heartbeatTimeout)
