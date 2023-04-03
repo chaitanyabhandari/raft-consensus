@@ -192,7 +192,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	rf.mu.Lock()
 	fmt.Printf("server-%d:: AppendEntries: Acquired lock.\n", rf.me)
 
-	defer rf.mu.Unlock()
+	// defer rf.mu.Unlock()
 	// fmt.Printf("server-%d:: AppendEntries from %d of term %d, my term: %d!\n", rf.me, args.LeaderID, args.Term, rf.currentTerm)
 
 	// If args.Term == rf.currentTerm:
@@ -215,7 +215,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 		}
 		// rf.appendEntriesChannel is consumed by the election timeout goroutine
 		// to reset the timer.
-		rf.appendEntriesChannel <- reply
+		// rf.appendEntriesChannel <- reply
 	} else {
 		// RPC is received from a server with an older term. In this case, we should
 		// reject this RPC and send our current term so that the sender can
@@ -223,7 +223,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 		reply.Term = rf.currentTerm
 		reply.Appended = false
 		fmt.Printf("server-%d:: AppendEntries: Relin lock.\n", rf.me)
-
+		rf.mu.Unlock()
 		return
 	}
 	// fmt.Printf("1. server %d:: Received RPC from %d, len of args %d\n", rf.me, args.LeaderID, len(args.LogEntries))
@@ -232,6 +232,8 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 		reply.Appended = false
 		fmt.Printf("server-%d:: AppendEntries: Relin lock.\n", rf.me)
 
+		rf.mu.Unlock()
+		rf.appendEntriesChannel <- reply
 		return
 	} else {
 		if len(args.LogEntries) > 0 {
@@ -267,7 +269,8 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 		rf.lastApplied = rf.commitIndex
 	}
 	fmt.Printf("server-%d:: AppendEntries: Relin lock.\n", rf.me)
-
+	rf.mu.Unlock()
+	rf.appendEntriesChannel <- reply
 }
 
 // example RequestVote RPC handler.
