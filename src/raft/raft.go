@@ -185,7 +185,6 @@ func (rf *Raft) prefixMatches(leaderLastLogTerm int, leaderLastLogIndex int) boo
 
 func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply) {
 	rf.mu.Lock()
-	defer rf.mu.Unlock()
 	// fmt.Printf("server-%d:: AppendEntries from %d of term %d, my term: %d!\n", rf.me, args.LeaderID, args.Term, rf.currentTerm)
 
 	// If args.Term == rf.currentTerm:
@@ -206,21 +205,23 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 			// fmt.Printf("server-%d:: AppendEntries RPC Handler: Server %d has higher term (%d) than me (%d)! Transitioning from %s -> %s.!\n", rf.me, args.LeaderID, args.Term, rf.currentTerm, rf.state, Follower.String())
 			rf.state = Follower
 		}
-		// rf.appendEntriesChannel is consumed by the election timeout goroutine
-		// to reset the timer.
-		rf.appendEntriesChannel <- reply
 	} else {
 		// RPC is received from a server with an older term. In this case, we should
 		// reject this RPC and send our current term so that the sender can
 		// update their current term.
 		reply.Term = rf.currentTerm
 		reply.Appended = false
+		rf.mu.Unlock()
 		return
 	}
 	// fmt.Printf("1. server %d:: Received RPC from %d, len of args %d\n", rf.me, args.LeaderID, len(args.LogEntries))
 
 	if !rf.prefixMatches(args.PrevLogTerm, args.PrevLogIndex) {
 		reply.Appended = false
+		// rf.appendEntriesChannel is consumed by the election timeout goroutine
+		// to reset the timer.
+		rf.mu.Unlock()
+		rf.appendEntriesChannel <- reply
 		return
 	} else {
 		if len(args.LogEntries) > 0 {
@@ -255,6 +256,10 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 		}
 		rf.lastApplied = rf.commitIndex
 	}
+	// rf.appendEntriesChannel is consumed by the election timeout goroutine
+	// to reset the timer.
+	rf.mu.Unlock()
+	rf.appendEntriesChannel <- reply
 }
 
 // example RequestVote RPC handler.
